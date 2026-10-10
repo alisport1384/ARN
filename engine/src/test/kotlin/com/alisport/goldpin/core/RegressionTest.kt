@@ -118,25 +118,59 @@ class RegressionTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ۳) سفارشی که به مهلت می‌خورد باید «منقضی» باشد، نه «لغو»
+    // ۳) مسیر انقضای قطعی باید وضعیت، زمان پایان و هشدار را ثبت کند.
     // ─────────────────────────────────────────────────────────────────────────
     @Test
-    fun `order that times out is marked expired, not invalid`() {
-        val cfg = Settings().apply { maxBarsToFill = 3 }
-        val (_, b) = wire(cfg)
+    fun `expired order stores expiry status time reason and alert`() {
+        val (_, b) = wire(Settings())
+        val s = Setup(1L, 1, 6, 1950.0, 1850.0, 1, 0)
+        s.hvH = 1850.0; s.hvL = 1840.0; s.sl = 1839.0
+        s.tp1 = 1860.0; s.tp2 = 1870.0; s.tpx = 1880.0
+        val placed = Candle(0, 1_700_000_000_000L, 1900.0, 1901.0, 1899.0, 1900.0, 100.0)
+        b.registerLimit(s, placed)
+        var alertKind = ""
+        b.alertSink = { kind, _, _ -> alertKind = kind }
+
+        val expiryTime = placed.t + 5 * 60_000L
+        val reason = "گذشت یک کندل ساختار کامل"
+        b.onSetupExpired(s, expiryTime, 5, reason)
+        val o = b.orders.first()
+        assertEquals(OrderStatus.CANCELLED_EXPIRED, o.status)
+        assertEquals(expiryTime, o.closedT, "زمان انقضا باید زمان واقعی رخداد باشد")
+        assertTrue(o.cancelReason?.contains(reason) == true, "دلیل انقضا ثبت نشده")
+        assertEquals(AlertKind.CANCEL, alertKind, "انقضای واقعی باید هشدار لغو/انقضا بفرستد")
+    }
+
+    @Test
+    fun `entry candle touching TP1 closes at breakeven without a TP1 fill`() {
+        val (_, b) = wire(Settings())
         val s = Setup(1L, 1, 6, 1950.0, 1850.0, 1, 0)
         s.hvH = 1850.0; s.hvL = 1840.0; s.sl = 1839.0
         s.tp1 = 1860.0; s.tp2 = 1870.0; s.tpx = 1880.0
         b.registerLimit(s, Candle(0, 1_700_000_000_000L, 1900.0, 1901.0, 1899.0, 1900.0, 100.0))
+        b.onBar(Candle(1, 1_700_000_060_000L, 1850.0, 1865.0, 1845.0, 1855.0, 100.0))
 
-        // بازار هرگز به ۱۸۵۰ نمی‌رسد → سفارش باید منقضی شود
-        for (i in 0 until 40) {
-            b.onBar(Candle(i, 1_700_000_000_000L + i * 60_000, 1900.0, 1901.0, 1899.0, 1900.0, 100.0))
-        }
-        val o = b.orders.first()
-        assertEquals(OrderStatus.CANCELLED_EXPIRED, o.status,
-            "سفارش منقضی باید وضعیت CANCELLED_EXPIRED بگیرد تا تب سفارش‌ها «منقضی» نشان دهد")
-        assertTrue(o.cancelReason?.contains("مهلت") == true, "دلیل انقضا ثبت نشده")
+        val t = b.trades.single()
+        assertEquals(false, t.open)
+        assertTrue(t.reason.contains("سر‌به‌سر"))
+        assertTrue(t.fills.any { it.kind == "BE" && it.qty > 0 })
+        assertEquals(false, t.fills.any { it.kind == "TP1" }, "TP1 در کندل ورود نباید ثبت شود")
+    }
+
+    @Test
+    fun `stop loss wins when the entry candle also touches final target`() {
+        val (_, b) = wire(Settings())
+        val s = Setup(1L, 1, 6, 1950.0, 1850.0, 1, 0)
+        s.hvH = 1850.0; s.hvL = 1840.0; s.sl = 1839.0
+        s.tp1 = 1860.0; s.tp2 = 1870.0; s.tpx = 1880.0
+        b.registerLimit(s, Candle(0, 1_700_000_000_000L, 1900.0, 1901.0, 1899.0, 1900.0, 100.0))
+        b.onBar(Candle(1, 1_700_000_060_000L, 1850.0, 1890.0, 1835.0, 1860.0, 100.0))
+
+        val t = b.trades.single()
+        assertEquals(false, t.open)
+        assertEquals("حد ضرر", t.reason)
+        assertTrue(t.fills.any { it.kind == "SL" })
+        assertEquals(false, t.fills.any { it.kind == "TPX" })
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -164,6 +198,33 @@ class RegressionTest {
         val back = Store.load(json).cfg
         assertEquals(true, back.rejectCandleNext, "rejectCandleNext ذخیره نمی‌شد")
         assertEquals(30, back.vpRows)
+    }
+
+    @Test
+    fun `pin sequence and armed setup state survive save and restore`() {
+        val cfg = Settings()
+        val e = Engine(cfg)
+        val b = PaperBroker(cfg)
+        e.buActive = true; e.beActive = true
+        e.pinSeq = 9; e.buSeq = 8; e.beSeq = 7
+        e.lastBUpinRef = 100.5; e.lastBUpinHi = 102.0
+        e.lastBEpinRef = 120.5; e.lastBEpinLo = 118.0
+        val s = Setup(4L, 1, 6, 110.0, 100.0, 1, 12).apply {
+            armBi = 13; armsSinceS = 2; prevEntry = 105.0
+            rearmAllowed = true; entryBi = 14
+        }
+        e.setups.add(s)
+        val json = Store.save(cfg, e, b, listOf(Candle(0, 1_700_000_000_000L, 100.0, 101.0, 99.0, 100.5, 50.0)))
+        val back = Store.load(json).eng
+
+        assertEquals(true, back.buActive); assertEquals(true, back.beActive)
+        assertEquals(9, back.pinSeq); assertEquals(8, back.buSeq); assertEquals(7, back.beSeq)
+        assertEquals(100.5, back.lastBUpinRef); assertEquals(102.0, back.lastBUpinHi)
+        assertEquals(120.5, back.lastBEpinRef); assertEquals(118.0, back.lastBEpinLo)
+        val restored = back.setups.single()
+        assertEquals(13, restored.armBi); assertEquals(2, restored.armsSinceS)
+        assertEquals(105.0, restored.prevEntry); assertEquals(true, restored.rearmAllowed)
+        assertEquals(14, restored.entryBi)
     }
 
     // ─────────────────────────────────────────────────────────────────────────

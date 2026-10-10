@@ -3,6 +3,7 @@ package com.alisport.goldpin
 import android.os.Handler
 import android.os.Looper
 import android.content.Context
+import android.widget.Toast
 import com.alisport.goldpin.core.*
 import com.alisport.goldpin.data.Feed
 import com.alisport.goldpin.data.FeedException
@@ -66,6 +67,7 @@ class AppState {
     /** ورود خودکار به تمام‌صفحه در تب چارت */
     var autoFullscreen: Boolean = false
     private var appCtx: Context? = null
+    @Volatile private var lastSyntheticVolumeNoticeAt: Long = 0L
 
     /**
      * نخ «تغییر وضعیت» — موتور، کارگزار و کندل‌ها فقط اینجا عوض می‌شوند (اجرای سریالی).
@@ -162,6 +164,9 @@ class AppState {
         val uiVersion = p.getInt("ui_prefs_version", 0)
         autoFullscreen = if (uiVersion < 2) false else p.getBoolean("auto_fullscreen", false)
         if (uiVersion < 2) p.edit().putBoolean("auto_fullscreen", false).putInt("ui_prefs_version", 2).apply()
+        Feed.connectTimeoutMs = p.getInt("feed_connect_timeout_ms", 8000).coerceIn(1000, 120000)
+        Feed.readTimeoutMs = p.getInt("feed_read_timeout_ms", 12000).coerceIn(1000, 120000)
+        Feed.syntheticVolumeWarning = { count -> announceSyntheticVolume(count) }
         Log.i(Log.CAT_APP, "AppState راه‌اندازی شد",
             "autoFullscreen=$autoFullscreen logEnabled=${Log.enabled} alerts=${Alerts.enabled}")
         wireLogging()
@@ -169,7 +174,21 @@ class AppState {
 
     fun persistPrefs(ctx: Context) {
         ctx.getSharedPreferences("goldpin", Context.MODE_PRIVATE).edit()
-            .putBoolean("auto_fullscreen", autoFullscreen).apply()
+            .putBoolean("auto_fullscreen", autoFullscreen)
+            .putInt("feed_connect_timeout_ms", Feed.connectTimeoutMs)
+            .putInt("feed_read_timeout_ms", Feed.readTimeoutMs)
+            .apply()
+    }
+
+    @Synchronized
+    private fun announceSyntheticVolume(candleCount: Int) {
+        val now = System.currentTimeMillis()
+        if (now - lastSyntheticVolumeNoticeAt < 10 * 60_000L) return
+        lastSyntheticVolumeNoticeAt = now
+        val ctx = appCtx ?: return
+        val body = "این داده حجم واقعی ندارد؛ برای ادامه، حجم تقریبی از دامنهٔ کندل‌ها ساخته شد (${Fa.d(candleCount.toString())} کندل)."
+        Alerts.fire(ctx, AlertKind.FEED, "حجم تقریبی جایگزین شد", body)
+        main.post { Toast.makeText(ctx, body, Toast.LENGTH_LONG).show() }
     }
 
     /**
@@ -633,7 +652,7 @@ class AppState {
         to.rejectCandleNext = c.rejectCandleNext
         to.mintick = c.mintick; to.slBufTicks = c.slBufTicks; to.minTPunits = c.minTPunits
         to.useRiskPct = c.useRiskPct; to.riskPct = c.riskPct; to.equityPct = c.equityPct
-        to.maxLeverage = c.maxLeverage; to.roundQty = c.roundQty; to.maxBarsToFill = c.maxBarsToFill
+        to.maxLeverage = c.maxLeverage; to.roundQty = c.roundQty
         to.contractSize = c.contractSize; to.initialEquity = c.initialEquity
     }
 
@@ -661,6 +680,10 @@ class AppState {
         dst.expectedReady = src.expectedReady
         dst.lowestBUpin = src.lowestBUpin; dst.highestBE = src.highestBE
         dst.lastBUpin = src.lastBUpin; dst.lastBEpin = src.lastBEpin
+        dst.buActive = src.buActive; dst.beActive = src.beActive
+        dst.pinSeq = src.pinSeq; dst.buSeq = src.buSeq; dst.beSeq = src.beSeq
+        dst.lastBUpinRef = src.lastBUpinRef; dst.lastBUpinHi = src.lastBUpinHi
+        dst.lastBEpinRef = src.lastBEpinRef; dst.lastBEpinLo = src.lastBEpinLo
         dst.lastZoneTop = src.lastZoneTop; dst.lastZoneBot = src.lastZoneBot
         dst.lastPocPx = src.lastPocPx; dst.lastProfBars = src.lastProfBars
         dst.lastEntryPx = src.lastEntryPx; dst.lastSlPx = src.lastSlPx; dst.lastTpPx = src.lastTpPx

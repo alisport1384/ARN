@@ -133,6 +133,7 @@ object VolumeProfile {
     ): List<Zone> {
         val out = ArrayList<Zone>(2)
         val rej = ArrayList<Zone>(2)
+        var found = 0
         val rv = p.vol
         val lo = p.lo
         val step = p.step
@@ -140,7 +141,8 @@ object VolumeProfile {
             val stepDir = if (bull) 1 else -1
             var i = if (bull) 0 else rows - 1
             var guard = 0
-            while (guard < 4 * rows && out.size < 2) {
+            // سقف دو نامزد در مجموع است؛ نامزد ردشده به‌خاطر کلوز هم سهمیه می‌گیرد.
+            while (guard < 4 * rows && out.size + rej.size < 2) {
                 guard++
                 // ① صعود به سمت قلهٔ محلی در جهت حرکت
                 //   §۲-۴ اکید + قاعدهٔ کارفرما ۱۴۰۵/۰۷/۱۹:
@@ -183,7 +185,7 @@ object VolumeProfile {
                 var tr = -1
                 var k = pk
                 while (k + stepDir in 0..(rows - 1) && rv[k + stepDir] < rv[k]) k += stepDir
-                if (k != pk) tr = k
+                if (k != pk && k + stepDir in 0..(rows - 1)) tr = k
                 //   دره پیدا نشد (لبهٔ جدول) — جست‌وجو تمام می‌شود
                 //   (ناحیهٔ یک‌ردیفه تا مرز جدول نسازیم).
                 if (tr < 0) break
@@ -195,7 +197,8 @@ object VolumeProfile {
                 val rowCnt = hiIdx - loIdx + 1
                 val closeOK = if (bull) zTop < cClose else zBot > cClose
                 if (zTop > zBot && rowCnt >= minRows) {
-                    val z = Zone(zTop, zBot, if (closeOK) out.size + 1 else rej.size + 1, loIdx, hiIdx)
+                    val z = Zone(zTop, zBot, found + 1, loIdx, hiIdx)
+                    found++
                     if (closeOK) out.add(z) else rej.add(z)
                 }
                 //  ادامه پیمایش از یک ردیف بعد از دره — §۲-۴: بعد از هر دره الگوریتم

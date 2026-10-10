@@ -30,18 +30,22 @@ class FeedException(msg: String) : Exception(msg)
 object Feed {
 
     const val SYMBOL_DEFAULT = "GC=F"
+    @Volatile var connectTimeoutMs: Int = 8000
+    @Volatile var readTimeoutMs: Int = 12000
+    /** برای اینکه استفاده از حجم ساختگی فقط در لاگ نماند، اپ این callback را وصل می‌کند. */
+    @Volatile var syntheticVolumeWarning: ((Int) -> Unit)? = null
 
     // ── ابزار HTTP ─────────────────────────────────────────────────────────────
     /**
      * @param connectMs سقف اتصال و @param readMs سقف خواندن.
      *
      * ⚠ این سقف‌ها مستقیماً «بدترین حالت یک تیک لایو» را می‌سازند. پیش‌تر هر دو
-     * ۲۰٬۰۰۰ms بود: ۲ میزبان Yahoo × (۲۰+۲۰) + ۳ منبع قیمت × (۱۲+۱۲) = تا **۱۵۲ ثانیه**
-     * برای یک تیک. با فاصلهٔ پیش‌فرض ۱۰ ثانیه یعنی صف کارها بی‌نهایت رشد می‌کرد.
-     * حالا بدترین حالت ≈ ۲×(۸+۱۲) + ۱۲ = **۵۲ ثانیه** است و `CoalescingGate` هم
-     * نمی‌گذارد تیک‌ها روی هم تلنبار شوند.
+     * ۲۰٬۰۰۰ms بود و سه منبع قیمت هم timeout جداگانه داشتند؛ یک تیک می‌توانست
+     * بیش از دو دقیقه طول بکشد. حالا هر درخواست حداکثر ۸+۱۲ ثانیه است، دو تلاش Yahoo
+     * و بودجهٔ زنجیرهٔ قیمت هرکدام محدودند (بدترین حالت حدود ۶۰ ثانیه)، و `CoalescingGate`
+     * نمی‌گذارد تیک‌های تازه روی هم تلنبار شوند.
      */
-    private fun get(urlStr: String, connectMs: Int = 8000, readMs: Int = 12000, userAgent: String = UA): String {
+    private fun get(urlStr: String, connectMs: Int = connectTimeoutMs, readMs: Int = readTimeoutMs, userAgent: String = UA): String {
         val url = URL(urlStr)
         val conn = url.openConnection() as HttpURLConnection
         conn.connectTimeout = connectMs
@@ -151,7 +155,7 @@ object Feed {
     /** نرخ لحظه‌ای طلای نقدی (Spot) — بدون کلید */
     fun goldApiSpot(): Double? {
         return try {
-            val body = get("https://api.gold-api.com/price/XAU", connectMs = 5000, readMs = 7000)
+            val body = get("https://api.gold-api.com/price/XAU")
             val p = JSONObject(body).optDouble("price", Double.NaN)
             if (p.isNaN()) null else p
         } catch (e: Exception) {
@@ -163,7 +167,7 @@ object Feed {
     /** نرخ XAU/USD از Swissquote (عمومی، بدون کلید) */
     fun swissquoteSpot(): Double? {
         return try {
-            val body = get("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD", connectMs = 5000, readMs = 7000)
+            val body = get("https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD")
             val arr = org.json.JSONArray(body)
             val profiles = arr.getJSONObject(0).getJSONArray("spreadProfilePrices")
             val p = profiles.getJSONObject(0)
@@ -179,7 +183,7 @@ object Feed {
     /** نرخ طلای توکنیزه (PAXG) از CoinGecko — پشتیبان سوم */
     fun coinGeckoSpot(): Double? {
         return try {
-            val body = get("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd", connectMs = 5000, readMs = 7000)
+            val body = get("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd")
             val p = JSONObject(body).optJSONObject("pax-gold")?.optDouble("usd", Double.NaN) ?: Double.NaN
             if (p.isNaN()) null else p
         } catch (e: Exception) {
@@ -196,7 +200,7 @@ object Feed {
      * بدون این سقف، وقتی هر سه منبع قطع باشند یک تیک لایو ~۳۶ ثانیه فقط برای
      * قیمت لحظه‌ای معطل می‌ماند (و تیک‌های بعدی پشت آن صف می‌کشند).
      */
-    fun spotPrice(budgetMs: Long = 12000L): Pair<Double?, String> {
+    fun spotPrice(budgetMs: Long = connectTimeoutMs.toLong() + readTimeoutMs.toLong()): Pair<Double?, String> {
         val deadline = System.currentTimeMillis() + budgetMs
         goldApiSpot()?.let { Log.d(Log.CAT_FEED, "قیمت لحظه‌ای از gold-api", com.alisport.goldpin.util.Fa.n(it, 2)); return it to "gold-api" }
         if (System.currentTimeMillis() >= deadline) { Log.w(Log.CAT_FEED, "بودجهٔ قیمت لحظه‌ای تمام شد", "منبع بعدی امتحان نشد"); return null to "کند/ناموفق" }
@@ -267,9 +271,12 @@ object Feed {
 
     /** اگر فید حجم نداشت، حجم تقریبی از دامنهٔ کندل می‌سازیم (تقریبی — برای کارکرد موتور). */
     fun synthesizeVolumeIfMissing(candles: List<Candle>): List<Candle> {
+        if (candles.isEmpty()) return candles
         val hasVol = candles.count { it.v > 0.0 } > candles.size / 10
         if (hasVol) return candles
         Log.w(Log.CAT_FEED, "فید حجم نداشت → ساخت حجم تقریبی از دامنهٔ کندل", "کندل=${candles.size}")
+        try { syntheticVolumeWarning?.invoke(candles.size) }
+        catch (t: Throwable) { Log.e(Log.CAT_FEED, "اعلام حجم ساختگی به کاربر ناموفق بود", t) }
         return candles.map { Candle(it.bi, it.t, it.o, it.h, it.l, it.c, (it.h - it.l) * 10000.0 + 1.0) }
     }
 

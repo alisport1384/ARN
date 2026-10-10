@@ -53,10 +53,9 @@ class Settings {
     var equityPct: Double = 100.0
     var maxLeverage: Double = 10.0            // §5: اهرم پیش‌فرض ۱۰ (تصمیم نهایی مالک ۱٫۴٫۹)
     var roundQty: Boolean = false
-    // §4-8: انقضای سفارش معلق به‌جای ۱۵۰ کندل، با عبور از سقف pinBE (خرید) / کف pinBU
-    // (فروش) یا گذشت یک کندل ساختار کامل حساب می‌شود. `maxBarsToFill` نگه داشته
-    // می‌شود اما روی مقدار «بسیار بزرگ» تنظیم است که تأثیری ندارد.
-    var maxBarsToFill: Int = 100_000
+    // §4-8/§۱۴ سند نهایی: انقضای سفارش معلق فقط با (الف) عبور باز/کلوز از سقف pinBE
+    // (خرید) / کف pinBU (فروش) یا (ب) گذشت یک کندل ساختار کامل بعد از مسلح شدن.
+    // سقف زمانی «لغو پس از N کندل» طبق تصمیم مالک حذف شد (سند §۱۴: لازم نیست).
     var contractSize: Double = 1.0
     var initialEquity: Double = 100000.0     // §5: سرمایهٔ اولیه ۱۰۰٬۰۰۰ (تصمیم نهایی)
 
@@ -70,7 +69,7 @@ class Settings {
         it.rejectCandleNext = rejectCandleNext
         it.mintick = mintick; it.slBufTicks = slBufTicks; it.minTPunits = minTPunits
         it.useRiskPct = useRiskPct; it.riskPct = riskPct; it.equityPct = equityPct
-        it.maxLeverage = maxLeverage; it.roundQty = roundQty; it.maxBarsToFill = maxBarsToFill
+        it.maxLeverage = maxLeverage; it.roundQty = roundQty
         it.contractSize = contractSize; it.initialEquity = initialEquity
     }
 }
@@ -104,10 +103,9 @@ class Engine(val cfg: Settings) {
     var lowestBUpin = Double.NaN; var highestBE = Double.NaN
     var lastBUpin = Double.NaN; var lastBEpin = Double.NaN
 
-    // ── docs/19: چرخهٔ عمر پین‌ها و روندِ توالی‌محور ────────────────────────────
-    /** `lastBUpin`/`lastBEpin` **سطح** هستند و حتی بعد از ابطال پین باقی می‌مانند
-     *  (بند ۵-۱: پینِ حذف‌شده تا تشکیل پین جدید نقش HL/LH را نگه می‌دارد).
-     *  `buActive`/`beActive` می‌گویند آیا پین هنوز **معتبر** است. */
+    // ── چرخهٔ عمر پین‌ها و روندِ توالی‌محور (سند نهایی §4-3/§4-4) ────────────────
+    /** `lastBUpin`/`lastBEpin` همراه با ref و لبهٔ دیگر، هنگام ابطال کامل پاک می‌شوند؛
+     *  `buActive`/`beActive` مشخص می‌کنند پین ثبت‌شده هنوز معتبر است یا نه. */
     var buActive = false; var beActive = false
     /** شمارهٔ توالی: با هر پینِ تاییدشده یکی زیاد می‌شود تا بدانیم کدام بعد از کدام آمده. */
     var pinSeq = 0; var buSeq = -1; var beSeq = -1
@@ -273,7 +271,7 @@ class Engine(val cfg: Settings) {
                 if (s.stage == 4 && s.rearmAllowed) {
                     s.stage = 8; s.note = "گذشت کندل ساختار جدید"
                     s.rearmAllowed = false
-                    broker?.onSetupInvalidated(s)
+                    broker?.onSetupInvalidated(s, curT, curBi)
                     events.add("[${s.id}] یک کندل ساختار جدید بسته شد — مسلح مجدد ممنوع")
                     lg("ENGINE", "کندل ساختار جدید بسته شد → مسلح مجدد ستاپ #${s.id} ممنوع",
                         "bar=$i")
@@ -407,34 +405,37 @@ class Engine(val cfg: Settings) {
         }
 
         // ── ابطال پین **بعد از** Ready (سند نهایی §4-3) ──
-        // · §4-3: باز یا کلوز از سطح ابطال یا لبهٔ پین عبور کند و توالی چرخش
-        //   وجود نداشته باشد ⇒ پین **کامل پاک می‌شود**، سطحش نگه داشته نمی‌شود.
-        // · بررسی شکست کف (BU) / سقف (BE) در بلوک trend انجام می‌شود و آن‌جا در
-        //   صورت نبود توالی، clearBUpin / clearBEpin صدا زده می‌شود.
-        // · مقایسه‌ها اکید هستند (تساوی نمی‌کُشد).
+        // · §4-3: باز یا کلوز از ref یا لبهٔ پین عبور کند و توالی چرخش نباشد ⇒
+        //   پین کامل پاک می‌شود؛ سایه و تساوی نقشی ندارند.
+        // · چرخش روند جداگانه در بلوک trend، فقط با کلوز کندل ساختار بررسی می‌شود.
         if (buActive && !lastBUpinRef.isNaN() && sb.bi > 0) {
-            // §4-3 سند نهایی: باز یا کلوز از ref عبور کند OR باز یا کلوز از کف پین عبور کند.
-            //   اگر pinBE ثبت شده، این چرخش است (در بلوک trend هندل می‌شود).
+            // §4-3/§۳ سند نهایی: فقط باز یا کلوز از ref یا کف پین عبور کند (اکید؛
+            //   سایه و تساوی کاری نمی‌کند). اگر pinBE **بعد از** این pinBU ثبت شده
+            //   باشد (beSeq > buSeq) این یک توالی چرخش است و پین پاک نمی‌شود.
             val crossedRef = (sb.o < lastBUpinRef || sb.c < lastBUpinRef)
-            val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin || sb.l <= lastBUpin)
-            // اگر pinBE فعال است، شکست کف pinBU = چرخش روند (توسط بلوک trend هندل می‌شود).
-            val isRotation = beActive && crossedLow
+            val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
+            // توالی چرخش = پین مخالف بعد از این پین ثبت شده باشد (نه صرفاً فعال بودن).
+            val isRotation = beSeq > buSeq
             if ((crossedRef || crossedLow) && !isRotation) {
+                val oldPin = lastBUpin
+                val oldRef = lastBUpinRef
                 clearBUpin()
-                addMarker(sb.bi, lastBUpin, 10, "pinBU بی‌اعتبار شد")
+                addMarker(sb.bi, oldPin, 10, "pinBU بی‌اعتبار شد")
                 lg("ENGINE", "pinBU بی‌اعتبار شد — پین کامل پاک شد",
-                    "ref=${f2(lastBUpinRef)} lo=${f2(lastBUpin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                    "ref=${f2(oldRef)} lo=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
             }
         }
         if (beActive && !lastBEpinRef.isNaN() && sb.bi > 0) {
             val crossedRef = (sb.o > lastBEpinRef || sb.c > lastBEpinRef)
-            val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin || sb.h >= lastBEpin)
-            val isRotation = buActive && crossedHigh
+            val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
+            val isRotation = buSeq > beSeq
             if ((crossedRef || crossedHigh) && !isRotation) {
+                val oldPin = lastBEpin
+                val oldRef = lastBEpinRef
                 clearBEpin()
-                addMarker(sb.bi, lastBEpin, 10, "pinBE بی‌اعتبار شد")
+                addMarker(sb.bi, oldPin, 10, "pinBE بی‌اعتبار شد")
                 lg("ENGINE", "pinBE بی‌اعتبار شد — پین کامل پاک شد",
-                    "ref=${f2(lastBEpinRef)} hi=${f2(lastBEpin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                    "ref=${f2(oldRef)} hi=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
             }
         }
 
@@ -485,10 +486,11 @@ class Engine(val cfg: Settings) {
                         alarm(AlertKind.TREND, "چرخش روند به نزولی",
                             "کلوز ${f2(sb.c)} زیر کف pinBU ${f2(lastBUpin)} بسته شد")
                     } else if (buActive) {
+                        val oldPin = lastBUpin
                         clearBUpin()
-                        addMarker(sb.bi, lastBUpin, 10, "pinBU حذف شد (شکست کف بدون توالی)")
+                        addMarker(sb.bi, oldPin, 10, "pinBU حذف شد (شکست کف بدون توالی)")
                         lg("ENGINE", "کلوز زیر pinBU ولی توالی کامل نبود — pinBU کامل پاک شد، روند صعودی ماند",
-                            "pinBU=${f2(lastBUpin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
+                            "pinBU=${f2(oldPin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
                     }
                 }
             }
@@ -504,10 +506,11 @@ class Engine(val cfg: Settings) {
                         alarm(AlertKind.TREND, "چرخش روند به صعودی",
                             "کلوز ${f2(sb.c)} بالای سقف pinBE ${f2(lastBEpin)} بسته شد")
                     } else if (beActive) {
+                        val oldPin = lastBEpin
                         clearBEpin()
-                        addMarker(sb.bi, lastBEpin, 10, "pinBE حذف شد (شکست سقف بدون توالی)")
+                        addMarker(sb.bi, oldPin, 10, "pinBE حذف شد (شکست سقف بدون توالی)")
                         lg("ENGINE", "کلوز بالای pinBE ولی توالی کامل نبود — pinBE کامل پاک شد، روند نزولی ماند",
-                            "pinBE=${f2(lastBEpin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
+                            "pinBE=${f2(oldPin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
                     }
                 }
             }
@@ -563,7 +566,7 @@ class Engine(val cfg: Settings) {
             val s = setups.removeAt(pick)
             if (s.stage < 7) {
                 events.add("[${s.id}] پروندهٔ ستاپ بسته شد (سقف ستاپ‌های هم‌زمان)")
-                broker?.onSetupInvalidated(s)
+                broker?.onSetupInvalidated(s, curT, curBi)
             }
         }
     }
@@ -616,7 +619,7 @@ class Engine(val cfg: Settings) {
                     //  اگر ستاپ قبلاً مسلح شده بود (stage=6)، سفارش معلق هم لغو می‌شود —
                     //  در غیر این‌صورت سفارش یتیم می‌ماند و ممکن است در کندل بعد پر شود
                     //  در حالی که موتور دیگر آن ستاپ را نمی‌شناسد.
-                    if (s.stage == 6) broker?.onSetupInvalidated(s)
+                    if (s.stage == 6) broker?.onSetupInvalidated(s, curT, curBi)
                     s.midRef = Double.NaN; s.midBi = -1; s.markBi = -1
                     s.touchMidStart = aggM.cur?.t ?: mc.t
                     s.stage = 2
@@ -641,6 +644,7 @@ class Engine(val cfg: Settings) {
         for (s in setups) {
             if (s.stage < 2 || s.stage > 6 || s.midRef.isNaN() || q1.bi <= s.midConfirmBi) continue
             val bullL = s.dir == 1
+            var lvConfirmedNow = false
 
             // ── مارک / تایید کندل ولوم کم ──
             if (!s.lvUsed && s.stage <= 4) {
@@ -652,12 +656,13 @@ class Engine(val cfg: Settings) {
                             "vol=${f2(q1.v)} < prev=${f2(prevT1Vol)} hi=${f2(q1.h)} lo=${f2(q1.l)} bar=${q1.bi}")
                     }
                 } else {
-                    val violL = if (bullL) q1.l <= s.lvL else q1.h >= s.lvH
+                    val violL = if (bullL) q1.l < s.lvL else q1.h > s.lvH
                     val confL = if (bullL) q1.c > s.lvH else q1.c < s.lvL
                     if (violL) {
                         s.lvBi = -1
                     } else if (confL) {
                         s.lvConfBi = curBi
+                        lvConfirmedNow = true
                         s.stage = 4
                         cnt.lv++
                         s.lvTouched = false
@@ -675,12 +680,14 @@ class Engine(val cfg: Settings) {
             }
 
             // ── یک‌بارمصرف بودن باکس ولوم کم ──
-            if (s.lvBi >= 0 && !s.lvUsed && s.stage in 4..6) {
+            // کندل تاییدکننده خودش «برگشت» محسوب نمی‌شود؛ یک کندل تریگر۱ بعدتر لازم است.
+            if (!lvConfirmedNow && s.lvBi >= 0 && !s.lvUsed && s.stage in 4..6) {
                 val inside = q1.l <= s.lvH && q1.h >= s.lvL
                 if (inside && !s.lvTouched) {
                     s.lvTouched = true
                     if (s.hvScanBi < 0 && cfg.hvScanFirstTouch) s.hvScanBi = q1.bi
-                } else if (s.lvTouched && !inside) {
+                } else if (s.lvTouched) {
+                    // سند: خروج فقط با کلوز آن‌طرف باکس سنجیده می‌شود؛ لازم نیست کل کندل بیرون باشد.
                     val left = if (bullL) q1.c > s.lvH else q1.c < s.lvL
                     if (left) {
                         s.lvUsed = true
@@ -695,7 +702,7 @@ class Engine(val cfg: Settings) {
                             s.stage = 8
                             s.note = "باکس ولوم کم مصرف شد (یک‌بار، قبل از مسلح)"
                             events.add("[${s.id}] باکس ولوم کم قبل از مسلح مصرف شد — ستاپ تمام")
-                            broker?.onSetupInvalidated(s)
+                            broker?.onSetupInvalidated(s, curT, curBi)
                         } else if (s.stage == 6) {
                             s.note = "باکس ولوم کم مصرف شد (سفارش معلق زنده ماند)"
                             events.add("[${s.id}] باکس ولوم کم بعد از مسلح مصرف شد — سفارش معلق معتبر ماند")
@@ -711,9 +718,33 @@ class Engine(val cfg: Settings) {
     //  ⑬ موتور تریگر ۲ (چارت) : ناحیهٔ ساختار · ناحیهٔ ولوم زیاد · ورود · مدیریت
     // ═══════════════════════════════════════════════════════════════════════════
     private fun trigger2Engine(cd: Candle) {
-        val low = cd.l; val high = cd.h; val close = cd.c; val volume = cd.v
+        val open = cd.o; val low = cd.l; val high = cd.h; val close = cd.c; val volume = cd.v
         for (s in setups) {
             val bull = s.dir == 1
+
+            // §4-6: تأیید میانی باید روی هر کندل بستهٔ تریگر۲ بررسی شود؛
+            // منتظر بسته‌شدن کندل میانی نمانیم، چون یک عبور کوتاه هم تأیید را باطل می‌کند.
+            if (s.stage in 2..6 && !s.midRef.isNaN() && curBi > s.midConfirmBi) {
+                val brokenMid = if (cfg.midInvalidClose) {
+                    if (bull) close < s.midRef else close > s.midRef
+                } else {
+                    if (bull) low < s.midRef else high > s.midRef
+                }
+                if (brokenMid) {
+                    val old = s.midRef
+                    if (s.stage == 6) broker?.onSetupInvalidated(s, curT, curBi)
+                    s.midRef = Double.NaN; s.midBi = -1; s.markBi = -1
+                    s.touchMidStart = aggM.cur?.t ?: cd.t
+                    s.stage = 2
+                    s.lvBi = -1; s.lvConfBi = -1; s.hvBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                    s.lvTouched = false; s.lvUsed = false
+                    s.orderId = -1
+                    addMarker(curBi, old, 10, "تایید میانی باطل شد")
+                    lg("ENGINE", "تایید میانی باطل شد · ستاپ #${s.id}",
+                        "سطح قبلی=${f2(old)} bar=$curBi · تریگر۲")
+                    continue
+                }
+            }
 
             // ① برخورد به ناحیهٔ فیکس‌رنج ساختار
             if (s.stage == 0 && !s.zGone && curBi > s.zBi) {
@@ -733,7 +764,7 @@ class Engine(val cfg: Settings) {
                 val broken = if (bull) close < s.zBot else close > s.zTop
                 if (broken) {
                     //  اگر سفارش معلق داشت (stage=6) آن را هم لغو کن
-                    if (s.stage == 6) broker?.onSetupInvalidated(s)
+                    if (s.stage == 6) broker?.onSetupInvalidated(s, curT, curBi)
                     s.zGone = true
                     s.stage = 8
                     s.note = "شکست ناحیهٔ ساختار (لغو)"
@@ -764,8 +795,9 @@ class Engine(val cfg: Settings) {
                 val scanOK = if (s.hvScanBi < 0) true else curBi >= s.hvScanBi
                 if (scanOK) {
                     val marked = s.hvBi >= 0
-                    val viol = marked && (if (bull) low <= s.hvL else high >= s.hvH)
-                    val conf = marked && (if (bull) close > s.hvH else close < s.hvL)
+                    val viol = marked && (if (bull) low < s.hvL else high > s.hvH)
+                    val conf = marked && volume > prevChartVol &&
+                            (if (bull) close > s.hvH else close < s.hvL)
                     if (viol) {
                         s.hvBi = -1; s.runMax = volume; s.stage = 4
                         lg("ENGINE", "کندل ولوم زیاد نقض شد → جست‌وجوی کندل جدید · ستاپ #${s.id}",
@@ -794,14 +826,15 @@ class Engine(val cfg: Settings) {
             //    ب) گذشت یک کندل ساختار کامل بعد از مسلح شدن (n کندل تریگر۲).
             if (s.stage == 6 && curBi > s.hvConfBi) {
                 var expired = false; var expReason = ""
-                if (bull && !highestBE.isNaN() && (high >= highestBE || close >= highestBE)) {
-                    expired = true; expReason = "قیمت به بالای pinBE (${f2(highestBE)}) رسید"
+                if (bull && !highestBE.isNaN() && (open > highestBE || close > highestBE)) {
+                    expired = true; expReason = "باز/کلوز از بالای pinBE (${f2(highestBE)}) عبور کرد"
                 }
-                if (!bull && !lowestBUpin.isNaN() && (low <= lowestBUpin || close <= lowestBUpin)) {
-                    expired = true; expReason = "قیمت به زیر pinBU (${f2(lowestBUpin)}) رسید"
+                if (!bull && !lowestBUpin.isNaN() && (open < lowestBUpin || close < lowestBUpin)) {
+                    expired = true; expReason = "باز/کلوز از زیر pinBU (${f2(lowestBUpin)}) عبور کرد"
                 }
-                // گذشت n کندل تریگر۲ (تقریباً یک کندل ساختار کامل)
-                if (!expired && s.armBi >= 0) {
+                // گذشت n کندل تریگر۲ (تقریباً یک کندل ساختار کامل)؛ اگر هم‌زمان
+                // شرط قیمتی رخ دهد، مهلت ساختاری اولویت دارد و مسلح مجدد مجاز نیست.
+                if (s.armBi >= 0) {
                     val nBars = cfg.tfS / maxOf(1, cfg.tf2)
                     if (curBi - s.armBi >= nBars) {
                         expired = true
@@ -815,11 +848,12 @@ class Engine(val cfg: Settings) {
                     s.stage = if (s.lvUsed || expReason.contains("کندل ساختار")) 8 else 4
                     s.note = "سفارش منقضی"
                     events.add("[${s.id}] سفارش منقضی شد — $expReason")
-                    broker?.onSetupInvalidated(s)
+                    broker?.onSetupExpired(s, curT, curBi, expReason)
                     s.orderId = -1
                     s.hvBi = -1; s.runMax = volume
-                    // بازنشانی ورود/خروج از باکس LV برای اسکن دوباره:
-                    if (s.stage == 4) { s.lvReEntered = false; s.rearmAllowed = true }
+                    // انقضای قیمتی اجازهٔ مسلح مجدد می‌دهد؛ همان یک برگشت LV مصرف می‌شود.
+                    // انقضای زمانی ستاپ را به مرحلهٔ ۸ برده و دیگر مسلح نمی‌کند.
+                    if (s.stage == 4) s.rearmAllowed = true
                     lg("ENGINE", "سفارش معلق منقضی شد · ستاپ #${s.id}",
                         "reason=$expReason stage=${s.stage} bar=$curBi")
                     continue
@@ -830,18 +864,11 @@ class Engine(val cfg: Settings) {
             // §4-8 سند نهایی: نقض ناحیه HV بعد از مسلح با **یک تیک عبور** از
             // سمت دور (wick کافی است)، نه فقط کلوز.
             if (s.stage == 6 && curBi > s.hvConfBi) {
-                val hvViol = if (bull) low <= s.hvL else high >= s.hvH
-                if (hvViol) {
-                    // HV-nقض قبل از ورود — در همان کندل ساختار هنوز می‌تواند
-                    // یک HV جدید مارک/تأیید شود (مسلح مجدد با ورود بهتر).
-                    s.hvBi = -1; s.runMax = volume
-                    s.stage = if (s.lvUsed) 8 else 4
-                    broker?.onSetupInvalidated(s)
-                    s.orderId = -1
-                    if (s.stage == 4) { s.lvReEntered = false; s.rearmAllowed = true }
-                    lg("ENGINE", "ناحیهٔ HV نقض شد (یک تیک از سمت دور) → سفارش معلق لغو · ستاپ #${s.id}",
-                        "hvL=${f2(s.hvL)} hvH=${f2(s.hvH)} stage=${s.stage} bar=$curBi")
-                } else if (if (bull) low <= s.hvH else high >= s.hvL) {
+                val hvViol = if (bull) low < s.hvL else high > s.hvH
+                val entryTouched = if (bull) low <= s.hvH else high >= s.hvL
+                // مسیر قیمت به ورود (لبهٔ نزدیک) می‌رسد پیش از لبهٔ دورِ نقض؛
+                // پس اگر هر دو در یک کندل باشند، اول سفارش پر می‌شود.
+                if (entryTouched) {
                     s.entry = if (bull) s.hvH else s.hvL
                     s.stage = 7
                     s.entryBi = curBi   // کندل پرشدن — برای قاعده §۶-۲۱
@@ -850,6 +877,19 @@ class Engine(val cfg: Settings) {
                     addMarker(curBi, s.entry, 8, (if (bull) "ورود خرید" else "ورود فروش") + " @ " + f2(s.entry))
                     lg("TRADE", "قیمت به ناحیهٔ ولوم زیاد برگشت (شرط ورود) · ستاپ #${s.id}",
                         "ورود=${f2(s.entry)} bar=$curBi")
+                } else if (hvViol) {
+                    // اگر ورود رخ نداد، نقض HV فقط اسکن HV را از نو آغاز می‌کند؛
+                    // همان برگشت اول LV معتبر می‌ماند و قاعدهٔ «ورود بهتر» اعمال نمی‌شود.
+                    s.hvBi = -1; s.runMax = volume
+                    s.stage = if (s.lvUsed) 8 else 4
+                    broker?.onSetupInvalidated(s, curT, curBi)
+                    s.orderId = -1
+                    if (s.stage == 4) {
+                        s.prevEntry = Double.NaN
+                        s.rearmAllowed = false
+                    }
+                    lg("ENGINE", "ناحیهٔ HV نقض شد (یک تیک از سمت دور) → سفارش لغو و اسکن از نو · ستاپ #${s.id}",
+                        "hvL=${f2(s.hvL)} hvH=${f2(s.hvH)} stage=${s.stage} bar=$curBi")
                 }
             }
 
@@ -967,12 +1007,17 @@ class Engine(val cfg: Settings) {
         }
         if (bull) {
             if (s.tpx - eRef < cfg.minTPunits) s.tpx = eRef + cfg.minTPunits
-            if (s.tp1.isNaN() || s.tp1 <= eRef) s.tp1 = eRef + (s.tpx - eRef) * 0.382
-            if (s.tp2.isNaN() || s.tp2 <= eRef) s.tp2 = eRef + (s.tpx - eRef) * 0.5
+            // فیبوی نامعتبر: فقط TPX فالبک دارد؛ TP1/TP2 باید خالی بمانند.
+            if (haveFib) {
+                if (s.tp1.isNaN() || s.tp1 <= eRef) s.tp1 = eRef + (s.tpx - eRef) * 0.382
+                if (s.tp2.isNaN() || s.tp2 <= eRef) s.tp2 = eRef + (s.tpx - eRef) * 0.5
+            }
         } else {
             if (eRef - s.tpx < cfg.minTPunits) s.tpx = eRef - cfg.minTPunits
-            if (s.tp1.isNaN() || s.tp1 >= eRef) s.tp1 = eRef - (eRef - s.tpx) * 0.382
-            if (s.tp2.isNaN() || s.tp2 >= eRef) s.tp2 = eRef - (eRef - s.tpx) * 0.5
+            if (haveFib) {
+                if (s.tp1.isNaN() || s.tp1 >= eRef) s.tp1 = eRef - (eRef - s.tpx) * 0.382
+                if (s.tp2.isNaN() || s.tp2 >= eRef) s.tp2 = eRef - (eRef - s.tpx) * 0.5
+            }
         }
         // §4-8 شرط مسلح مجدد: فقط قبل از گذشت یک کندل ساختار جدید مجاز است،
         // و ورود جدید باید بهتر از قبلی باشد (خرید پایین‌تر، فروش بالاتر).
@@ -1092,7 +1137,7 @@ class Engine(val cfg: Settings) {
                 s.note = "لغو (تغییر روند)"
                 events.add("[${s.id}] لغو شد — تغییر روند")
                 lg("ENGINE", "ستاپ #${s.id} به دلیل تغییر روند لغو شد", "dir=${if (dir == 1) "BUY" else "SELL"}")
-                broker?.onSetupInvalidated(s)
+                broker?.onSetupInvalidated(s, curT, curBi)
                 it.remove()
             }
         }

@@ -57,7 +57,7 @@ object Store {
         "rejectCandleNext" to c.rejectCandleNext,
         "mintick" to c.mintick, "slBufTicks" to c.slBufTicks, "minTPunits" to c.minTPunits,
         "useRiskPct" to c.useRiskPct, "riskPct" to c.riskPct, "equityPct" to c.equityPct,
-        "maxLeverage" to c.maxLeverage, "roundQty" to c.roundQty, "maxBarsToFill" to c.maxBarsToFill,
+        "maxLeverage" to c.maxLeverage, "roundQty" to c.roundQty,
         "contractSize" to c.contractSize, "initialEquity" to c.initialEquity
     )
 
@@ -78,7 +78,6 @@ object Store {
         c.mintick = m["mintick"].asD(); c.slBufTicks = m["slBufTicks"].asD(); c.minTPunits = m["minTPunits"].asD()
         c.useRiskPct = m["useRiskPct"].asB(); c.riskPct = m["riskPct"].asD(); c.equityPct = m["equityPct"].asD()
         c.maxLeverage = m["maxLeverage"].asD(); c.roundQty = m["roundQty"].asB()
-        c.maxBarsToFill = m["maxBarsToFill"].asI()
         c.contractSize = m["contractSize"].asD(); c.initialEquity = m["initialEquity"].asD()
         return c
     }
@@ -132,6 +131,10 @@ object Store {
         o["expectedReady"] = e.expectedReady
         o["lowestBUpin"] = e.lowestBUpin; o["highestBE"] = e.highestBE
         o["lastBUpin"] = e.lastBUpin; o["lastBEpin"] = e.lastBEpin
+        o["buActive"] = e.buActive; o["beActive"] = e.beActive
+        o["pinSeq"] = e.pinSeq; o["buSeq"] = e.buSeq; o["beSeq"] = e.beSeq
+        o["lastBUpinRef"] = e.lastBUpinRef; o["lastBUpinHi"] = e.lastBUpinHi
+        o["lastBEpinRef"] = e.lastBEpinRef; o["lastBEpinLo"] = e.lastBEpinLo
         o["lastZoneTop"] = e.lastZoneTop; o["lastZoneBot"] = e.lastZoneBot
         o["lastPocPx"] = e.lastPocPx; o["lastProfBars"] = e.lastProfBars
         o["lastEntryPx"] = e.lastEntryPx; o["lastSlPx"] = e.lastSlPx; o["lastTpPx"] = e.lastTpPx
@@ -178,6 +181,12 @@ object Store {
         e.expectedReady = m["expectedReady"].asI()
         e.lowestBUpin = m["lowestBUpin"].asD(); e.highestBE = m["highestBE"].asD()
         e.lastBUpin = m["lastBUpin"].asD(); e.lastBEpin = m["lastBEpin"].asD()
+        e.buActive = m["buActive"].asB(); e.beActive = m["beActive"].asB()
+        e.pinSeq = m["pinSeq"].asI()
+        e.buSeq = if (m.containsKey("buSeq")) m["buSeq"].asI() else -1
+        e.beSeq = if (m.containsKey("beSeq")) m["beSeq"].asI() else -1
+        e.lastBUpinRef = m["lastBUpinRef"].asD(); e.lastBUpinHi = m["lastBUpinHi"].asD()
+        e.lastBEpinRef = m["lastBEpinRef"].asD(); e.lastBEpinLo = m["lastBEpinLo"].asD()
         e.lastZoneTop = m["lastZoneTop"].asD(); e.lastZoneBot = m["lastZoneBot"].asD()
         e.lastPocPx = m["lastPocPx"].asD(); e.lastProfBars = m["lastProfBars"].asI()
         e.lastEntryPx = m["lastEntryPx"].asD(); e.lastSlPx = m["lastSlPx"].asD(); e.lastTpPx = m["lastTpPx"].asD()
@@ -197,7 +206,9 @@ object Store {
         "midConfirmBi" to s.midConfirmBi, "runMax" to s.runMax, "zGone" to s.zGone,
         "lvTouched" to s.lvTouched, "lvUsed" to s.lvUsed, "lvReEntered" to s.lvReEntered,
         "entry" to s.entry, "sl" to s.sl, "tp1" to s.tp1, "tp2" to s.tp2, "tpx" to s.tpx,
-        "be" to s.be, "tp2Hit" to s.tp2Hit, "note" to s.note, "orderId" to s.orderId
+        "be" to s.be, "tp2Hit" to s.tp2Hit, "note" to s.note, "orderId" to s.orderId,
+        "armBi" to s.armBi, "armsSinceS" to s.armsSinceS, "prevEntry" to s.prevEntry,
+        "rearmAllowed" to s.rearmAllowed, "entryBi" to s.entryBi
     )
 
     private fun setupFrom(m: Map<String, Any?>): Setup {
@@ -215,6 +226,11 @@ object Store {
         // tp2Hit در فایل‌های ذخیره‌شدهٔ نسخه‌های قبل وجود ندارد → false پیش‌فرض
         s.tp2Hit = m["tp2Hit"].asB()
         s.note = m["note"].asS(); s.orderId = m["orderId"].asL()
+        s.armBi = if (m.containsKey("armBi")) m["armBi"].asI() else -1
+        s.armsSinceS = m["armsSinceS"].asI()
+        s.prevEntry = m["prevEntry"].asD()
+        s.rearmAllowed = m["rearmAllowed"].asB()
+        s.entryBi = if (m.containsKey("entryBi")) m["entryBi"].asI() else -1
         return s
     }
 

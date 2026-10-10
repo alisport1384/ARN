@@ -116,9 +116,9 @@ object Alerts {
 
     private fun defaultOn(kind: String): Boolean = when (kind) {
         K_ARMED, K_FILLED, K_TP1, K_TP2, K_TPX, K_SL, K_BE, K_CLOSE -> true
-        K_CANCEL, K_ZONE_DEAD -> true
+        K_CANCEL, K_ZONE_DEAD, K_FEED -> true
         K_LV, K_HV, K_TREND, K_PIN -> true
-        K_ZONE_NEW, K_STAGE, K_FEED, K_INFO -> false
+        K_ZONE_NEW, K_STAGE, K_INFO -> false
         else -> false
     }
 

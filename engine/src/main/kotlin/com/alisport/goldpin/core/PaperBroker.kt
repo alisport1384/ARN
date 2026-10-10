@@ -134,9 +134,16 @@ class PaperBroker(private val cfg: Settings) {
      * ستاپ باطل شد.
      * سفارش معلق لغو می‌شود؛ معاملهٔ پرشده تا حد سود/ضرر می‌رود.
      */
-    fun onSetupInvalidated(s: Setup) {
+    fun onSetupInvalidated(s: Setup, t: Long? = null, bi: Int? = null) {
         val o = orders.lastOrNull { it.setupId == s.id && it.status == OrderStatus.PENDING }
-        if (o != null) cancel(o, "ستاپ باطل شد", o.placedT, o.placedBi)
+        if (o != null) cancel(o, "ستاپ باطل شد", t ?: o.placedT, bi ?: o.placedBi)
+    }
+
+    /** انقضای واقعی طبق §4-8: وضعیت، زمان و هشدار سفارش هر سه ثبت می‌شوند. */
+    fun onSetupExpired(s: Setup, t: Long, bi: Int, reason: String) {
+        val o = orders.lastOrNull { it.setupId == s.id && it.status == OrderStatus.PENDING } ?: return
+        cancel(o, reason, t, bi, OrderStatus.CANCELLED_EXPIRED)
+        alarm(AlertKind.CANCEL, "سفارش ورود منقضی شد", "ستاپ #${s.id} · $reason · قیمت ${fmt(o.price)}")
     }
 
     fun restorePending(o: Order?) { if (o != null && !pendings.any { it.id == o.id }) pendings.add(o) }
@@ -153,16 +160,8 @@ class PaperBroker(private val cfg: Settings) {
         for (p in pendingSnapshot) {
             if (p.status != OrderStatus.PENDING) continue
             val touched = if (p.dir == 1) cd.l <= p.price else cd.h >= p.price
-            val barsWaiting = cd.bi - p.placedBi
             val sameBarAsArmed = cd.bi == p.placedBi
-            if (touched && !sameBarAsArmed) {
-                fillEntry(p, cd)
-            } else if (barsWaiting > cfg.maxBarsToFill) {
-                cancel(p, "مهلت پر شدن تمام شد ($barsWaiting کندل)", cd.t, cd.bi,
-                    OrderStatus.CANCELLED_EXPIRED)
-                alarm(AlertKind.CANCEL, "سفارش ورود منقضی شد",
-                    "پس از $barsWaiting کندل پر نشد · قیمت ${fmt(p.price)}")
-            }
+            if (touched && !sameBarAsArmed) fillEntry(p, cd)
         }
         // ② مدیریت پوزیشن‌های باز (کپی تا manageBar کلوز نکند و iteration نشکند)
         for (t in ArrayList(opens)) {
@@ -194,24 +193,13 @@ class PaperBroker(private val cfg: Settings) {
 
     private fun manageBar(t: Trade, cd: Candle) {
         val bull = t.dir == 1
-        val sameEntryBar = (cd.bi == t.entryBi)
+        val sameEntryBar = cd.bi == t.entryBi
         val slLvl = if (t.be) t.entry else t.sl0
         val q1 = t.qty * 0.33
         val q2 = t.qty * 0.33
-        val usedQty = t.fills.filter { it.kind != "ENTRY" }.sumOf { it.qty }
-        val remaining = t.qty - usedQty
 
-        // §۶-۲۱: ورود و TP1 در یک کندل → خروج سر‌به‌سر خالص (نتیجه صفر).
-        if (sameEntryBar && !t.tp1.isNaN()) {
-            val tp1Hit = if (bull) cd.h >= t.tp1 else cd.l <= t.tp1
-            val entryRetraced = if (bull) cd.l <= t.entry else cd.h >= t.entry
-            if (tp1Hit && entryRetraced) {
-                t.be = true
-                closeAll(t, t.entry, cd.t, cd.bi, "خروج سر‌به‌سر (TP1 و ورود یک کندل)")
-                return
-            }
-        }
-
+        // §4-9 ترتیب ثابت: حد ضرر، حد سود نهایی، TP1، TP2.
+        // حد ضرر در کندلی که SL و TP لمس شوند برنده است.
         val hitStop = if (bull) cd.l <= slLvl else cd.h >= slLvl
         if (hitStop) {
             closeAll(t, slLvl, cd.t, cd.bi, if (t.be) "خروج سر‌به‌سر" else "حد ضرر")
@@ -222,19 +210,41 @@ class PaperBroker(private val cfg: Settings) {
             closeAll(t, t.tpX, cd.t, cd.bi, "حد سود نهایی (1.272)")
             return
         }
+
+        // §6-21: اگر همان کندل ورود، هم TP1 و هم ورود لمس شوند، TP1 ثبت نمی‌شود؛
+        // کل معامله در ورود بسته می‌شود. این استثنا بعد از اولویت SL و TPX است.
+        if (sameEntryBar && !t.tp1.isNaN()) {
+            val tp1Hit = if (bull) cd.h >= t.tp1 else cd.l <= t.tp1
+            val entryTouched = if (bull) cd.l <= t.entry else cd.h >= t.entry
+            if (tp1Hit && entryTouched) {
+                t.be = true
+                closeAll(t, t.entry, cd.t, cd.bi, "خروج سر‌به‌سر (TP1 و ورود یک کندل)")
+                return
+            }
+        }
+
         val tp1Done = t.fills.any { it.kind == "TP1" }
-        if (!tp1Done && !t.tp1.isNaN() && !sameEntryBar) {
+        val remaining = t.qty - t.fills.filter { it.kind != "ENTRY" }.sumOf { it.qty }
+        if (!tp1Done && !t.tp1.isNaN()) {
             val hit = if (bull) cd.h >= t.tp1 else cd.l <= t.tp1
             if (hit) {
                 addExit(t, cd, t.tp1, min(q1, remaining), "TP1")
                 t.be = true
             }
         }
+
         val remainingNow = t.qty - t.fills.filter { it.kind != "ENTRY" }.sumOf { it.qty }
         val tp2Done = t.fills.any { it.kind == "TP2" }
-        if (t.open && !tp2Done && !t.tp2.isNaN() && remainingNow > 1e-9) {
+        if (t.open && t.be && !tp2Done && !t.tp2.isNaN() && remainingNow > 1e-9) {
             val hit = if (bull) cd.h >= t.tp2 else cd.l <= t.tp2
             if (hit) addExit(t, cd, t.tp2, min(q2, remainingNow), "TP2")
+        }
+
+        // اگر TP1 همین کندل حد ضرر را به ورود برد و قیمت به ورود برگشت،
+        // کل باقیمانده در همین کندل بسته می‌شود؛ موتور و دفتر Broker یکی می‌مانند.
+        val returnedToEntry = if (bull) cd.l <= t.entry else cd.h >= t.entry
+        if (t.open && t.be && returnedToEntry) {
+            closeAll(t, t.entry, cd.t, cd.bi, "خروج سر‌به‌سر")
         }
     }
 

@@ -23,8 +23,9 @@ class ZoneFirstRowTest {
 
     @Test
     fun `bear - first row is the biggest, zone starts at the candle HIGH`() {
-        // نزولی: پیمایش از ردیف ۴ (سقف) به کف. ردیف ۴ = ۹۰۰ بزرگ‌ترین است.
-        val rv = doubleArrayOf(10.0, 20.0, 30.0, 40.0, 900.0)
+        // نزولی: قلهٔ ردیف ۴ است؛ درهٔ هم‌حجمِ ردیف‌های ۲ و ۳ پیش از لبهٔ پایین.
+        // افتی که تا لبه ادامه پیدا کند دیگر درهٔ معتبر نیست.
+        val rv = doubleArrayOf(10.0, 20.0, 30.0, 30.0, 900.0)
         val z = VolumeProfile.zones(prof(rv), 5, bull = false, cClose = 900.0, minRows = 1)
         assertEquals(1, z.size, "باید یک ناحیه ساخته شود")
         // سقف ناحیه = لبهٔ کندل = lo + rows*step = 1000 + 5*10 = 1050
@@ -34,8 +35,8 @@ class ZoneFirstRowTest {
 
     @Test
     fun `bull - first row is the biggest, zone starts at the candle LOW`() {
-        // صعودی: پیمایش از ردیف ۰ (کف) به سقف. ردیف ۰ = ۹۰۰ بزرگ‌ترین است.
-        val rv = doubleArrayOf(900.0, 40.0, 30.0, 20.0, 10.0)
+        // صعودی: ردیف ۰ بزرگ‌ترین است؛ درهٔ هم‌حجم پیش از لبهٔ بالایی قرار دارد.
+        val rv = doubleArrayOf(900.0, 40.0, 30.0, 30.0, 20.0)
         val z = VolumeProfile.zones(prof(rv), 5, bull = true, cClose = 1100.0, minRows = 1)
         assertEquals(1, z.size, "باید یک ناحیه ساخته شود (قرینهٔ حالت نزولی)")
         // کف ناحیه = لبهٔ کندل = lo = 1000
@@ -54,6 +55,21 @@ class ZoneFirstRowTest {
     }
 
     @Test
+    fun `decline reaching the table edge is not a valid valley`() {
+        val rv = doubleArrayOf(10.0, 20.0, 30.0, 40.0, 900.0)
+        val z = VolumeProfile.zones(prof(rv), 5, bull = false, cClose = 0.0, minRows = 1)
+        assertEquals(0, z.size, "افت تا لبهٔ جدول درهٔ معتبر نیست")
+    }
+
+    @Test
+    fun `rejected candidates also count toward the two-zone limit`() {
+        val rv = doubleArrayOf(10.0, 20.0, 50.0, 30.0, 60.0, 40.0, 90.0, 70.0, 100.0)
+        val rejected = VolumeProfile.zones(prof(rv), 9, bull = false, cClose = 2000.0, minRows = 1,
+            wantRejected = true)
+        assertEquals(2, rejected.size, "حداکثر دو نامزد، حتی اگر هر دو به‌علت کلوز رد شوند")
+    }
+
+    @Test
     fun `flat profile still yields no zone`() {
         // کنترل منفی: اگر ردیف نخست بزرگ‌تر از بعدی **نباشد**، ناحیه‌ای ساخته نمی‌شود.
         val rv = doubleArrayOf(100.0, 100.0, 100.0, 100.0, 100.0)
@@ -64,9 +80,9 @@ class ZoneFirstRowTest {
     @Test
     fun `close inside the zone still rejects it`() {
         // شرط اعتبار دست‌نخورده: در نزولی باید zBot > close باشد.
-        val rv = doubleArrayOf(10.0, 20.0, 30.0, 40.0, 900.0)
+        val rv = doubleArrayOf(10.0, 20.0, 30.0, 30.0, 900.0)
         val ok = VolumeProfile.zones(prof(rv), 5, bull = false, cClose = 900.0, minRows = 1)
-        val rej = VolumeProfile.zones(prof(rv), 5, bull = false, cClose = 1010.0, minRows = 1,
+        val rej = VolumeProfile.zones(prof(rv), 5, bull = false, cClose = 1040.0, minRows = 1,
             wantRejected = true)
         assertEquals(1, ok.size)
         assertEquals(1, rej.size, "کلوز داخل ناحیه ⇒ ردشده")

@@ -32,6 +32,7 @@ import com.alisport.goldpin.core.TF_MODES
 import com.alisport.goldpin.core.Tf
 import com.alisport.goldpin.core.Trade
 import com.alisport.goldpin.core.ZoneStatus
+import com.alisport.goldpin.data.Feed
 import com.alisport.goldpin.data.Storage
 import com.alisport.goldpin.svc.EngineService
 import com.alisport.goldpin.ui.ChartView
@@ -938,7 +939,6 @@ class MainActivity : Activity() {
         v.addView(numRow("ریسک هر معامله (٪)", s.cfg.riskPct) { s.cfg.riskPct = it; s.rebuildAsync() })
         v.addView(numRow("حداکثر اهرم", s.cfg.maxLeverage) { s.cfg.maxLeverage = it; s.rebuildAsync() })
         v.addView(numRow("سرمایهٔ اولیه", s.cfg.initialEquity) { s.cfg.initialEquity = it; s.rebuildAsync() })
-        v.addView(numRow("لغو سفارش پس از N کندل", s.cfg.maxBarsToFill.toDouble()) { s.cfg.maxBarsToFill = it.toInt(); s.rebuildAsync() })
         v.addView(numRow("اندازهٔ قرارداد", s.cfg.contractSize) { s.cfg.contractSize = it; s.rebuildAsync() })
 
         // ── فید ──
@@ -955,6 +955,12 @@ class MainActivity : Activity() {
         v.addView(switchRow("ساخت حجم تقریبی اگر فید حجم نداشت", s.useSyntheticVolume) { s.useSyntheticVolume = it })
         v.addView(switchRow("حالت بک‌تست کامل (آخرین کندل هم بسته)", s.backtestFull) { s.backtestFull = it; s.rebuildAsync(clearOrders = true) })
         v.addView(numRow("فاصلهٔ به‌روزرسانی لایو (ثانیه)", s.livePollMs / 1000.0) { s.livePollMs = (it * 1000).toLong().coerceAtLeast(2000) })
+        v.addView(numRow("مهلت اتصال فید (ثانیه)", Feed.connectTimeoutMs / 1000.0) {
+            Feed.connectTimeoutMs = (it * 1000).toInt().coerceIn(1000, 120000); s.persistPrefs(this)
+        })
+        v.addView(numRow("مهلت خواندن فید (ثانیه)", Feed.readTimeoutMs / 1000.0) {
+            Feed.readTimeoutMs = (it * 1000).toInt().coerceIn(1000, 120000); s.persistPrefs(this)
+        })
         val feedRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         feedRow.addView(Ui.btn(this, "دانلود تاریخچه", Palette.panel2, Palette.txt, 11f).apply {
             setOnClickListener {
@@ -1190,7 +1196,7 @@ class MainActivity : Activity() {
         add("ناحیهٔ ساختار", "${Fa.n(o.zoneBot)} تا ${Fa.n(o.zoneTop)}")
         add("زمان ثبت", Fa.jalali(o.placedT))
         o.filledT?.let { add("زمان پر شدن", Fa.jalali(it)) }
-        add("مهلت", "${Fa.d(s.cfg.maxBarsToFill.toString())} کندل")
+        o.closedT?.let { add("زمان لغو/انقضا", Fa.jalali(it)) }
         AlertDialog.Builder(this).setTitle("جزئیات سفارش").setView(box).setPositiveButton("بستن", null).show()
     }
 
