@@ -53,8 +53,8 @@ class Settings {
     var equityPct: Double = 100.0
     var maxLeverage: Double = 10.0            // §5: اهرم پیش‌فرض ۱۰ (تصمیم نهایی مالک ۱٫۴٫۹)
     var roundQty: Boolean = false
-    // §4-8/§۱۴ سند نهایی: انقضای سفارش معلق فقط با (الف) عبور باز/کلوز از سقف pinBE
-    // (خرید) / کف pinBU (فروش) یا (ب) گذشت یک کندل ساختار کامل بعد از مسلح شدن.
+    // §4-8/§۱۴ سند نهایی: انقضای سفارش معلق با عبور باز/کلوز از آخرین pinBE/pinBU
+    // (سطح هنگام مسلح‌شدن ذخیره می‌شود) یا گذشت یک کندل ساختار کامل بعد از مسلح‌شدن.
     // سقف زمانی «لغو پس از N کندل» طبق تصمیم مالک حذف شد (سند §۱۴: لازم نیست).
     var contractSize: Double = 1.0
     var initialEquity: Double = 100000.0     // §5: سرمایهٔ اولیه ۱۰۰٬۰۰۰ (تصمیم نهایی)
@@ -263,17 +263,22 @@ class Engine(val cfg: Settings) {
         // ترتیب دقیقاً مثل Pine: ساختار → میانی → تریگر۱ → تریگر۲
         if (aggS.closedNow) {
             aggS.cl?.let { structureEngine(it) }
-            // §4-8: یک کندل ساختار کامل بعد از مسلح/ورود، ستاپ‌های منتظر
-            // مسلح مجدد (stage=4 با rearmAllowed) دیگر مجاز نیستند.
+            // §4-8: فقط پس از گذشت یک کندل ساختار کامل از زمان آخرین مسلح‌شدن،
+            // مسلح‌مجدد بسته می‌شود. اگر معامله باز باشد، خود معامله ادامه پیدا می‌کند.
             val it2 = setups.iterator()
             while (it2.hasNext()) {
                 val s = it2.next()
-                if (s.stage == 4 && s.rearmAllowed) {
-                    s.stage = 8; s.note = "گذشت کندل ساختار جدید"
+                val structureElapsed = fullStructureElapsed(s.armBi, i, cfg.tfS, cfg.tf2)
+                if (structureElapsed && s.stage == 4 && s.rearmAllowed) {
+                    s.stage = 8; s.note = "گذشت یک کندل ساختار کامل پس از مسلح‌شدن"
                     s.rearmAllowed = false
                     broker?.onSetupInvalidated(s, curT, curBi)
-                    events.add("[${s.id}] یک کندل ساختار جدید بسته شد — مسلح مجدد ممنوع")
-                    lg("ENGINE", "کندل ساختار جدید بسته شد → مسلح مجدد ستاپ #${s.id} ممنوع",
+                    events.add("[${s.id}] یک کندل ساختار کامل پس از مسلح‌شدن گذشت — مسلح‌مجدد ممنوع")
+                    lg("ENGINE", "یک کندل ساختار کامل گذشت → مسلح‌مجدد ستاپ #${s.id} ممنوع",
+                        "bar=$i")
+                } else if (structureElapsed && s.stage == 7 && s.rearmAllowed) {
+                    s.rearmAllowed = false
+                    lg("ENGINE", "یک کندل ساختار کامل در زمان معامله گذشت → مسلح‌مجدد بعدی ممنوع · ستاپ #${s.id}",
                         "bar=$i")
                 }
             }
@@ -642,8 +647,30 @@ class Engine(val cfg: Settings) {
     // ═══════════════════════════════════════════════════════════════════════════
     private fun trigger1Engine(q1: Candle) {
         for (s in setups) {
-            if (s.stage < 2 || s.stage > 6 || s.midRef.isNaN() || q1.bi <= s.midConfirmBi) continue
+            if (s.stage < 2 || s.stage > 7 || s.midRef.isNaN() || q1.bi <= s.midConfirmBi) continue
             val bullL = s.dir == 1
+
+            // هنگام معامله هم چرخهٔ یک‌بارمصرف تریگر۱ را دنبال می‌کنیم، فقط برای
+            // جلوگیری از مسلح‌مجدد اگر باکس در این فاصله مصرف شود؛ معامله را دست نمی‌زنیم.
+            if (s.stage == 7) {
+                if (s.lvBi >= 0 && !s.lvUsed) {
+                    val inside = q1.l <= s.lvH && q1.h >= s.lvL
+                    if (inside && !s.lvTouched) {
+                        s.lvTouched = true
+                    } else if (s.lvTouched) {
+                        val left = if (bullL) q1.c > s.lvH else q1.c < s.lvL
+                        if (left) {
+                            s.lvUsed = true
+                            s.rearmAllowed = false
+                            addMarker(q1.bi, if (bullL) s.lvH else s.lvL, 11, "باکس ولوم کم مصرف شد ✖")
+                            lg("ZONE", "باکس تریگر۱ هنگام معامله مصرف شد؛ مسلح‌مجدد بسته شد · ستاپ #${s.id}",
+                                "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi}")
+                        }
+                    }
+                }
+                continue
+            }
+
             var lvConfirmedNow = false
 
             // ── مارک / تایید کندل ولوم کم ──
@@ -724,6 +751,11 @@ class Engine(val cfg: Settings) {
 
             // §4-6: تأیید میانی باید روی هر کندل بستهٔ تریگر۲ بررسی شود؛
             // منتظر بسته‌شدن کندل میانی نمانیم، چون یک عبور کوتاه هم تأیید را باطل می‌کند.
+            if (s.stage == 7 && s.rearmAllowed && rearmInvalidatedByBar(s, cd, cfg.midInvalidClose)) {
+                s.rearmAllowed = false
+                lg("ENGINE", "اعتبار ناحیهٔ ساختار یا تایید میانی هنگام معامله از بین رفت؛ مسلح‌مجدد بسته شد · ستاپ #${s.id}",
+                    "zone=${f2(s.zBot)}-${f2(s.zTop)} midRef=${f2(s.midRef)} bar=$curBi")
+            }
             if (s.stage in 2..6 && !s.midRef.isNaN() && curBi > s.midConfirmBi) {
                 val brokenMid = if (cfg.midInvalidClose) {
                     if (bull) close < s.midRef else close > s.midRef
@@ -822,20 +854,24 @@ class Engine(val cfg: Settings) {
             }
 
             // ④-۰ انقضای سفارش معلق (§4-8 سند نهایی):
-            //    الف) قیمت (باز یا کلوز) از سقف pinBE (خرید) / کف pinBU (فروش) عبور کند.
-            //    ب) گذشت یک کندل ساختار کامل بعد از مسلح شدن (n کندل تریگر۲).
+            //    الف) قیمت (باز یا کلوز) از آخرین pinBE هنگام مسلح‌شدن (خرید) /
+            //       آخرین pinBU هنگام مسلح‌شدن (فروش) عبور کند.
+            //    ب) گذشت یک کندل ساختار کامل بعد از مسلح‌شدن (n کندل تریگر۲).
             if (s.stage == 6 && curBi > s.hvConfBi) {
                 var expired = false; var expReason = ""
-                if (bull && !highestBE.isNaN() && (open > highestBE || close > highestBE)) {
-                    expired = true; expReason = "باز/کلوز از بالای pinBE (${f2(highestBE)}) عبور کرد"
+                // برای فایل‌های ذخیرهٔ قدیمی، اگر snapshot هنوز ثبت نشده باشد از آخرین پین جاری پر می‌شود.
+                if (s.priceExpiryRef.isNaN()) {
+                    s.priceExpiryRef = if (bull) lastBEpin else lastBUpin
                 }
-                if (!bull && !lowestBUpin.isNaN() && (open < lowestBUpin || close < lowestBUpin)) {
-                    expired = true; expReason = "باز/کلوز از زیر pinBU (${f2(lowestBUpin)}) عبور کرد"
+                if (priceExpiryCrossed(bull, open, close, s.priceExpiryRef)) {
+                    expired = true
+                    expReason = if (bull) "باز/کلوز از بالای pinBE هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
+                                else "باز/کلوز از زیر pinBU هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
                 }
                 // گذشت n کندل تریگر۲ (تقریباً یک کندل ساختار کامل)؛ اگر هم‌زمان
                 // شرط قیمتی رخ دهد، مهلت ساختاری اولویت دارد و مسلح مجدد مجاز نیست.
                 if (s.armBi >= 0) {
-                    val nBars = cfg.tfS / maxOf(1, cfg.tf2)
+                    val nBars = maxOf(1, cfg.tfS / maxOf(1, cfg.tf2))
                     if (curBi - s.armBi >= nBars) {
                         expired = true
                         expReason = "گذشت یک کندل ساختار کامل (${nBars} کندل تریگر۲)"
@@ -965,21 +1001,20 @@ class Engine(val cfg: Settings) {
                     addMarker(curBi, px, 9, note + " @ " + f2(px))
                     lg("TRADE", "پایان معامله · ستاپ #${s.id} → $note",
                         "خروج=${f2(px)} bar=$curBi")
-                    // §4-8 مسلح مجدد بعد از SL یا خروج سر‌به‌سر (نه بعد از TPX):
-                    // ستاپ در صورتی به مرحله ۴ برمی‌گردد که LV مصرف نشده باشد.
-                    // (کندل ساختار جدید بعداً از طریق isNewS به stage ۸ می‌رود.)
+                    // §4-8: پس از SL/سر‌به‌سر (نه TPX)، فقط اگر ساختار، میانی و تریگر۱
+                    // هنوز معتبر باشند، همان ستاپ برای HV جدید می‌ماند؛ معاملهٔ باز در صورت نقض بسته نمی‌شود.
                     val finalWin = note.contains("1.272")
-                    if (!finalWin && !s.lvUsed) {
+                    if (!finalWin && s.rearmAllowed && rearmPrerequisitesValid(s)) {
                         s.stage = 4
                         s.hvBi = -1; s.runMax = volume
-                        s.lvReEntered = false
+                        // lvReEntered حفظ می‌شود: بازگشت اول تریگر۱ قبلاً رخ داده؛ برگشت دوم مجاز نیست.
                         s.be = false; s.tp2Hit = false
-                        s.rearmAllowed = true
                         s.orderId = -1
-                        lg("ENGINE", "معامله بسته شد ولی ستاپ برای مسلح مجدد باقی ماند · ستاپ #${s.id}",
+                        lg("ENGINE", "معامله بسته شد؛ مسلح‌مجدد مجاز ماند (پیش‌نیازهای ستاپ برقرارند) · ستاپ #${s.id}",
                             "reason=$note bar=$curBi")
                     } else {
                         s.stage = 8
+                        s.rearmAllowed = false
                         cnt.done++
                     }
                 }
@@ -995,38 +1030,18 @@ class Engine(val cfg: Settings) {
         s.sl = if (bull) s.hvL - cfg.slBufTicks * cfg.mintick else s.hvH + cfg.slBufTicks * cfg.mintick
         val a0 = if (bull) highestBE else lowestBUpin
         val a1 = s.midRef
-        val haveFib = !a0.isNaN() && !a1.isNaN() && (if (bull) a0 > a1 else a0 < a1)
-        if (haveFib) {
-            val r = if (bull) a0 - a1 else a1 - a0
-            s.tp1 = if (bull) a1 + 0.382 * r else a1 - 0.382 * r
-            s.tp2 = if (bull) a1 + 0.5 * r else a1 - 0.5 * r
-            s.tpx = if (bull) a1 + 1.272 * r else a1 - 1.272 * r
-        } else {
-            s.tpx = if (bull) eRef + cfg.minTPunits else eRef - cfg.minTPunits
-            s.tp1 = Double.NaN; s.tp2 = Double.NaN
-        }
-        if (bull) {
-            if (s.tpx - eRef < cfg.minTPunits) s.tpx = eRef + cfg.minTPunits
-            // فیبوی نامعتبر: فقط TPX فالبک دارد؛ TP1/TP2 باید خالی بمانند.
-            if (haveFib) {
-                if (s.tp1.isNaN() || s.tp1 <= eRef) s.tp1 = eRef + (s.tpx - eRef) * 0.382
-                if (s.tp2.isNaN() || s.tp2 <= eRef) s.tp2 = eRef + (s.tpx - eRef) * 0.5
-            }
-        } else {
-            if (eRef - s.tpx < cfg.minTPunits) s.tpx = eRef - cfg.minTPunits
-            if (haveFib) {
-                if (s.tp1.isNaN() || s.tp1 >= eRef) s.tp1 = eRef - (eRef - s.tpx) * 0.382
-                if (s.tp2.isNaN() || s.tp2 >= eRef) s.tp2 = eRef - (eRef - s.tpx) * 0.5
-            }
-        }
-        // §4-8 شرط مسلح مجدد: فقط قبل از گذشت یک کندل ساختار جدید مجاز است،
-        // و ورود جدید باید بهتر از قبلی باشد (خرید پایین‌تر، فروش بالاتر).
+        val targets = calculateTargetLevels(bull, eRef, a0, a1, cfg.minTPunits)
+        s.tp1 = targets.tp1
+        s.tp2 = targets.tp2
+        s.tpx = targets.tpx
+        // §4-8: پنجرهٔ مسلح‌مجدد پس از گذشت یک بازهٔ ساختار کامل بسته می‌شود؛
+        // ورود جدید نیز باید بهتر از قبلی باشد (خرید پایین‌تر، فروش بالاتر).
         val isRearm = !s.prevEntry.isNaN()
         if (isRearm) {
-            if (!s.rearmAllowed) {
+            if (!s.rearmAllowed || !rearmPrerequisitesValid(s)) {
                 s.hvBi = -1; s.runMax = Double.NaN
-                lg("ENGINE", "مسلح مجدد برای ستاپ #${s.id} رد شد (کندل ساختار جدید بسته شد)",
-                    "bar=$curBi")
+                lg("ENGINE", "مسلح‌مجدد ستاپ #${s.id} رد شد (پیش‌نیازهای ساختار/میانی/تریگر۱ برقرار نیست)",
+                    "rearmAllowed=${s.rearmAllowed} zGone=${s.zGone} midValid=${!s.midRef.isNaN()} lvBi=${s.lvBi} lvReEntered=${s.lvReEntered} lvUsed=${s.lvUsed} bar=$curBi")
                 return
             }
             val better = if (bull) eRef < s.prevEntry else eRef > s.prevEntry
@@ -1045,10 +1060,12 @@ class Engine(val cfg: Settings) {
                 "bar=$curBi")
             return
         }
-        val firstArm = s.armBi < 0
         s.armBi = curBi
         s.armsSinceS++
         s.prevEntry = eRef
+        // Pin-level expiration applies to the latest opposing pin as it stood when this order armed.
+        s.priceExpiryRef = if (bull) lastBEpin else lastBUpin
+        s.rearmAllowed = true
         s.stage = 6
         cnt.hv++
         s.hvConfBi = curBi
@@ -1206,7 +1223,93 @@ class Setup(
     var armBi = -1                // کندلی که در آن مسلح شدیم
     var armsSinceS = 0            // تعداد مسلح‌شدن در این ستاپ (برای شرط «پایین‌تر/بالاتر»)
     var prevEntry = Double.NaN    // ورود قبلی در همین ستاپ (برای مقایسه)
-    var rearmAllowed = false      // آیا مسلح مجدد در این ستاپ مجاز است (فقط قبل از کندل ساختار جدید)
+    var rearmAllowed = false      // آیا اعتبار ساختار/میانی/تریگر۱ برای مسلح‌مجدد حفظ شده است
+    var priceExpiryRef = Double.NaN // آخرین پین مخالف هنگام مسلح‌شدن این سفارش
     var entryBi = -1              // کندلی که ورود در آن پر شد (برای قاعده «ورود و TP1 در یک کندل»)
     val bull: Boolean get() = dir == 1
+}
+
+
+/** هدف‌های فیبوناچی با فالبک حداقل فاصلهٔ TPX. اگر TPX فالبک شود، پله‌ها نیز از همان فاصله محاسبه می‌شوند. */
+internal data class TargetLevels(val tp1: Double, val tp2: Double, val tpx: Double)
+
+internal fun calculateTargetLevels(
+    bull: Boolean,
+    entry: Double,
+    anchor0: Double,
+    anchor1: Double,
+    minDistance: Double
+): TargetLevels {
+    val haveFib = !anchor0.isNaN() && !anchor1.isNaN() &&
+            (if (bull) anchor0 > anchor1 else anchor0 < anchor1)
+    var tp1 = Double.NaN
+    var tp2 = Double.NaN
+    var tpx = if (bull) entry + minDistance else entry - minDistance
+
+    if (haveFib) {
+        val r = if (bull) anchor0 - anchor1 else anchor1 - anchor0
+        tp1 = if (bull) anchor1 + 0.382 * r else anchor1 - 0.382 * r
+        tp2 = if (bull) anchor1 + 0.5 * r else anchor1 - 0.5 * r
+        tpx = if (bull) anchor1 + 1.272 * r else anchor1 - 1.272 * r
+    }
+
+    if (bull) {
+        val movedToMinimum = tpx - entry < minDistance
+        if (movedToMinimum) tpx = entry + minDistance
+        if (haveFib) {
+            if (movedToMinimum) {
+                val distance = tpx - entry
+                tp1 = entry + distance * 0.382
+                tp2 = entry + distance * 0.5
+            } else {
+                if (tp1.isNaN() || tp1 <= entry) tp1 = entry + (tpx - entry) * 0.382
+                if (tp2.isNaN() || tp2 <= entry) tp2 = entry + (tpx - entry) * 0.5
+            }
+        }
+    } else {
+        val movedToMinimum = entry - tpx < minDistance
+        if (movedToMinimum) tpx = entry - minDistance
+        if (haveFib) {
+            if (movedToMinimum) {
+                val distance = entry - tpx
+                tp1 = entry - distance * 0.382
+                tp2 = entry - distance * 0.5
+            } else {
+                if (tp1.isNaN() || tp1 >= entry) tp1 = entry - (entry - tpx) * 0.382
+                if (tp2.isNaN() || tp2 >= entry) tp2 = entry - (entry - tpx) * 0.5
+            }
+        }
+    }
+    return TargetLevels(tp1, tp2, tpx)
+}
+
+/** A full structure interval has elapsed when the trigger-2 bar delta reaches its configured bar count. */
+internal fun fullStructureElapsed(armBi: Int, currentBi: Int, tfS: Int, tf2: Int): Boolean {
+    if (armBi < 0) return false
+    val nBars = maxOf(1, tfS / maxOf(1, tf2))
+    return currentBi - armBi >= nBars
+}
+
+/** Strict open/close crossing of the captured latest opposing pin; wicks and equality do not expire an order. */
+internal fun priceExpiryCrossed(bull: Boolean, open: Double, close: Double, level: Double): Boolean {
+    if (level.isNaN()) return false
+    return if (bull) open > level || close > level else open < level || close < level
+}
+
+/** The original structure/middle/Trigger-1 chain must remain valid for a rearm. */
+internal fun rearmPrerequisitesValid(s: Setup): Boolean =
+    !s.zGone && !s.midRef.isNaN() && s.lvBi >= 0 && s.lvReEntered && !s.lvUsed
+
+/** A close/wick that invalidates a pre-entry condition while the trade is open blocks only a future rearm. */
+internal fun rearmInvalidatedByBar(s: Setup, bar: Candle, midInvalidClose: Boolean): Boolean {
+    val bull = s.dir == 1
+    val structureBroken = bar.bi > s.zBi &&
+            (if (bull) bar.c < s.zBot else bar.c > s.zTop)
+    val midBroken = !s.midRef.isNaN() && bar.bi > s.midConfirmBi &&
+            (if (midInvalidClose) {
+                if (bull) bar.c < s.midRef else bar.c > s.midRef
+            } else {
+                if (bull) bar.l < s.midRef else bar.h > s.midRef
+            })
+    return structureBroken || midBroken
 }

@@ -208,7 +208,7 @@ object Store {
         "entry" to s.entry, "sl" to s.sl, "tp1" to s.tp1, "tp2" to s.tp2, "tpx" to s.tpx,
         "be" to s.be, "tp2Hit" to s.tp2Hit, "note" to s.note, "orderId" to s.orderId,
         "armBi" to s.armBi, "armsSinceS" to s.armsSinceS, "prevEntry" to s.prevEntry,
-        "rearmAllowed" to s.rearmAllowed, "entryBi" to s.entryBi
+        "rearmAllowed" to s.rearmAllowed, "priceExpiryRef" to s.priceExpiryRef, "entryBi" to s.entryBi
     )
 
     private fun setupFrom(m: Map<String, Any?>): Setup {
@@ -230,6 +230,7 @@ object Store {
         s.armsSinceS = m["armsSinceS"].asI()
         s.prevEntry = m["prevEntry"].asD()
         s.rearmAllowed = m["rearmAllowed"].asB()
+        s.priceExpiryRef = m["priceExpiryRef"].asD() // فایل‌های قدیمی: NaN و در اولین بررسی از آخرین پین پر می‌شود.
         s.entryBi = if (m.containsKey("entryBi")) m["entryBi"].asI() else -1
         return s
     }

@@ -211,7 +211,7 @@ class RegressionTest {
         e.lastBEpinRef = 120.5; e.lastBEpinLo = 118.0
         val s = Setup(4L, 1, 6, 110.0, 100.0, 1, 12).apply {
             armBi = 13; armsSinceS = 2; prevEntry = 105.0
-            rearmAllowed = true; entryBi = 14
+            rearmAllowed = true; priceExpiryRef = 120.75; entryBi = 14
         }
         e.setups.add(s)
         val json = Store.save(cfg, e, b, listOf(Candle(0, 1_700_000_000_000L, 100.0, 101.0, 99.0, 100.5, 50.0)))
@@ -224,6 +224,7 @@ class RegressionTest {
         val restored = back.setups.single()
         assertEquals(13, restored.armBi); assertEquals(2, restored.armsSinceS)
         assertEquals(105.0, restored.prevEntry); assertEquals(true, restored.rearmAllowed)
+        assertEquals(120.75, restored.priceExpiryRef, "سطح انقضای آخرین پین ذخیره نشد")
         assertEquals(14, restored.entryBi)
     }
 

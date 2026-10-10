@@ -146,6 +146,7 @@ type Setup
     bool   lvReEntered = false
     int    hvConfBi    = na
     int    armBi       = na
+    float  priceExpiryRef = na  // آخرین پین مخالف هنگام مسلح‌شدن سفارش
     int    armsSinceS  = 0
     float  prevEntry   = na
     bool   rearmAllowed = false
@@ -871,11 +872,16 @@ if aggS.closedNow
     if array.size(setups) > 0
         for j = 0 to array.size(setups) - 1
             Setup rearmSetup = array.get(setups, j)
-            if rearmSetup.stage == 4 and rearmSetup.rearmAllowed
+            int rearmBars = math.max(1, math.round(secS / sec2))
+            bool fullStructureElapsed = not na(rearmSetup.armBi) and (bar_index - rearmSetup.armBi) >= rearmBars
+            if rearmSetup.stage == 4 and rearmSetup.rearmAllowed and fullStructureElapsed
                 rearmSetup.stage := 8
                 rearmSetup.rearmAllowed := false
-                rearmSetup.note := "گذشت کندل ساختار جدید؛ مسلح مجدد ممنوع"
-                label.new(sb.bi, close, "مسلح مجدد ممنوع · کندل ساختار جدید", xloc.bar_index, yloc.price, color.new(color.gray, 30), label.style_label_left, color.white, size.tiny)
+                rearmSetup.note := "گذشت یک کندل ساختار کامل؛ مسلح مجدد ممنوع"
+                label.new(sb.bi, close, "مسلح مجدد ممنوع · کندل ساختار کامل", xloc.bar_index, yloc.price, color.new(color.gray, 30), label.style_label_left, color.white, size.tiny)
+            else if rearmSetup.stage == 7 and rearmSetup.rearmAllowed and fullStructureElapsed
+                // معامله باز می‌ماند؛ فقط اجازه مسلح‌مجدد بعدی بسته می‌شود.
+                rearmSetup.rearmAllowed := false
 
     // ── پروفایل حجم فیکس‌رنج کندل ساختار + ثبت ناحیه‌ها ──
     bool bullC = sb.c > sb.o
@@ -1017,7 +1023,7 @@ if agg1.closedNow and not na(agg1.cl) and array.size(setups) > 0
     Candle q1 = agg1.cl
     for i = 0 to array.size(setups) - 1
         Setup s = array.get(setups, i)
-        if s.stage >= 2 and s.stage <= 6 and not na(s.midRef) and q1.bi > s.midConfirmBi
+        if s.stage >= 2 and s.stage <= 7 and not na(s.midRef) and q1.bi > s.midConfirmBi
             bool bullL = s.dir == 1
             bool lvConfirmedNow = false
             // ── مارک / تایید / ابطال کندل ولوم کم ──
@@ -1050,7 +1056,7 @@ if agg1.closedNow and not na(agg1.cl) and array.size(setups) > 0
             // ── یک‌بارمصرف بودن باکس ولوم کم ──
             //   کندل تاییدکننده برگشت نیست؛ بعد از اولین لمس، خروج فقط با کلوز سنجیده می‌شود.
             //   در stage=6 باکس مصرف می‌شود ولی سفارش معلق طبق تصمیم مالک زنده می‌ماند.
-            if not lvConfirmedNow and not na(s.lvBi) and not s.lvUsed and s.stage >= 4 and s.stage <= 6
+            if not lvConfirmedNow and not na(s.lvBi) and not s.lvUsed and s.stage >= 4 and s.stage <= 7
                 bool insideBox = q1.l <= s.lvH and q1.h >= s.lvL
                 if insideBox and not s.lvTouched
                     s.lvTouched := true
@@ -1072,6 +1078,9 @@ if agg1.closedNow and not na(agg1.cl) and array.size(setups) > 0
                         else if s.stage == 6
                             // پس از مسلح شدن، مصرف LV باکس را می‌بندد اما سفارش را زنده می‌گذارد.
                             s.note := "باکس ولوم کم مصرف شد؛ سفارش مسلح زنده ماند"
+                        else if s.stage == 7
+                            // معامله ادامه دارد، اما باکس مصرف‌شده دیگر اجازه مسلح‌مجدد نمی‌دهد.
+                            s.rearmAllowed := false
                         label.new(q1.bi, bullL ? s.lvH : s.lvL, "باکس ولوم کم مصرف شد ✖", xloc.bar_index, yloc.price, color.new(color.silver, 30), bullL ? label.style_label_up : label.style_label_down, color.black, size.tiny)
 prevT1Vol := agg1.closedNow ? agg1.cl.v : prevT1Vol
 
@@ -1083,6 +1092,13 @@ if array.size(setups) > 0
         Setup s = array.get(setups, i)
         bool bull = s.dir == 1
 
+        // هنگام معامله باز، نقض ساختار/میانی فقط مسلح‌مجدد را می‌بندد؛ خود معامله ادامه دارد.
+        if s.stage == 7 and s.rearmAllowed and bar_index > s.zBi and (bull ? close < s.zBot : close > s.zTop)
+            s.rearmAllowed := false
+        if s.stage == 7 and s.rearmAllowed and not na(s.midRef) and bar_index > s.midConfirmBi
+            bool rearmMidBroken = midInvalid == "Close | بسته شدن" ? (bull ? close < s.midRef : close > s.midRef) : (bull ? low < s.midRef : high > s.midRef)
+            if rearmMidBroken
+                s.rearmAllowed := false
         // §4-6: ابطال تایید میانی روی تک‌تک کندل‌های بستهٔ تریگر۲؛ یک عبور کوتاه کافی است.
         if s.stage >= 2 and s.stage <= 6 and not na(s.midRef) and bar_index > s.midConfirmBi
             bool brokenMid = midInvalid == "Close | بسته شدن" ? (bull ? close < s.midRef : close > s.midRef) : (bull ? low < s.midRef : high > s.midRef)
@@ -1176,27 +1192,42 @@ if array.size(setups) > 0
                         tpxloc := bull ? a1 + 1.272 * R : a1 - 1.272 * R
                     else
                         tpxloc := bull ? eRef + minTPunits : eRef - minTPunits
+                    bool tpXMovedToMinimum = false
+                    float tpXFallbackDistance = na
                     if bull
-                        if tpxloc - eRef < minTPunits
+                        tpXMovedToMinimum := tpxloc - eRef < minTPunits
+                        if tpXMovedToMinimum
                             tpxloc := eRef + minTPunits
                         if haveFib
-                            if na(tp1loc) or tp1loc <= eRef
-                                tp1loc := eRef + (tpxloc - eRef) * 0.382
-                            if na(tp2loc) or tp2loc <= eRef
-                                tp2loc := eRef + (tpxloc - eRef) * 0.5
+                            if tpXMovedToMinimum
+                                tpXFallbackDistance := tpxloc - eRef
+                                tp1loc := eRef + tpXFallbackDistance * 0.382
+                                tp2loc := eRef + tpXFallbackDistance * 0.5
+                            else
+                                if na(tp1loc) or tp1loc <= eRef
+                                    tp1loc := eRef + (tpxloc - eRef) * 0.382
+                                if na(tp2loc) or tp2loc <= eRef
+                                    tp2loc := eRef + (tpxloc - eRef) * 0.5
                     else
-                        if eRef - tpxloc < minTPunits
+                        tpXMovedToMinimum := eRef - tpxloc < minTPunits
+                        if tpXMovedToMinimum
                             tpxloc := eRef - minTPunits
                         if haveFib
-                            if na(tp1loc) or tp1loc >= eRef
-                                tp1loc := eRef - (eRef - tpxloc) * 0.382
-                            if na(tp2loc) or tp2loc >= eRef
-                                tp2loc := eRef - (eRef - tpxloc) * 0.5
-                    // شرایط مسلح مجدد بعد از انقضا/حدضرر: قبل از کندل ساختار جدید
-                    // و ورود بهتر؛ نقض HV خودش prevEntry را پاک می‌کند و از نو می‌شمارد.
+                            if tpXMovedToMinimum
+                                tpXFallbackDistance := eRef - tpxloc
+                                tp1loc := eRef - tpXFallbackDistance * 0.382
+                                tp2loc := eRef - tpXFallbackDistance * 0.5
+                            else
+                                if na(tp1loc) or tp1loc >= eRef
+                                    tp1loc := eRef - (eRef - tpxloc) * 0.382
+                                if na(tp2loc) or tp2loc >= eRef
+                                    tp2loc := eRef - (eRef - tpxloc) * 0.5
+                    // مسلح‌مجدد فقط تا پیش از گذشت یک بازهٔ ساختار کامل از آخرین arm مجاز است؛
+                    // ورود هم باید بهتر باشد. نقض HV، prevEntry را پاک می‌کند و اسکن را از نو می‌سازد.
                     bool isRearm = not na(s.prevEntry)
                     bool betterEntry = bull ? eRef < s.prevEntry : eRef > s.prevEntry
-                    bool rearmOK = not isRearm or (s.rearmAllowed and betterEntry)
+                    bool rearmPrereqs = not s.zGone and not na(s.midRef) and not na(s.lvBi) and s.lvReEntered and not s.lvUsed
+                    bool rearmOK = not isRearm or (s.rearmAllowed and rearmPrereqs and betterEntry)
                     bool canArm = rearmOK and not entryPending and strategy.position_size == 0
                     if not canArm
                         s.hvBi := na
@@ -1214,6 +1245,8 @@ if array.size(setups) > 0
                         s.armBi := bar_index
                         s.armsSinceS += 1
                         s.prevEntry := eRef
+                        s.priceExpiryRef := bull ? lastBEpin : lastBUpin
+                        s.rearmAllowed := true
                         evArmedB := bull
                         evArmedS := not bull
                         if showTrade
@@ -1264,7 +1297,7 @@ if array.size(setups) > 0
 
         // ④ انقضا / ورود بعد از مسلح‌شدن
         if s.stage == 6 and bar_index > s.hvConfBi
-            bool pinBreak = bull ? (not na(highestBE) and (open > highestBE or close > highestBE)) : (not na(lowestBUpin) and (open < lowestBUpin or close < lowestBUpin))
+            bool pinBreak = bull ? (not na(s.priceExpiryRef) and (open > s.priceExpiryRef or close > s.priceExpiryRef)) : (not na(s.priceExpiryRef) and (open < s.priceExpiryRef or close < s.priceExpiryRef))
             int nBars = math.max(1, math.round(secS / sec2))
             bool barExpire = not na(s.armBi) and (bar_index - s.armBi) >= nBars
             bool expired = pinBreak or barExpire
@@ -1391,16 +1424,17 @@ if array.size(setups) > 0
                 lastResult := note
                 s.note := note
                 bool finalWin = str.contains(note, "1.272")
-                if not finalWin and not s.lvUsed
+                bool rearmPrereqsAfterTrade = s.rearmAllowed and not s.zGone and not na(s.midRef) and not na(s.lvBi) and s.lvReEntered and not s.lvUsed
+                if not finalWin and rearmPrereqsAfterTrade
                     s.stage := 4
                     s.hvBi := na
                     s.runMax := volume
-                    s.lvReEntered := false
+                    // lvReEntered حفظ می‌شود: برگشت اول تریگر۱ انجام شده و برگشت دوم مجاز نیست.
                     s.be := false
                     s.tp2Hit := false
-                    s.rearmAllowed := true
                 else
                     s.stage := 8
+                    s.rearmAllowed := false
                     cDone += 1
                 f_delLine(s.l6)
                 f_delLine(s.l7)
