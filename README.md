@@ -76,13 +76,13 @@
 
 صفحهٔ انتشار: **[github.com/alisport1384/st/releases](https://github.com/alisport1384/st/releases)**
 
-آخرین نسخهٔ پایدار: **GoldPin 1.4.4** (versionCode 20) — فایل
-`GoldPin-1.4.7-20.<sha>.apk` به‌همراه `sha256` کنارش. لینک‌ها عمومی‌اند و بدون
+آخرین نسخهٔ پایدار: **GoldPin 1.4.10** (versionCode 23) — فایل
+`GoldPin-1.4.10-23.<sha>.apk` به‌همراه `sha256` کنارش. لینک‌ها عمومی‌اند و بدون
 لاگین دانلود می‌شوند.
 
 صحت فایل دانلودشده:
 ```bash
-sha256sum -c GoldPin-1.4.7-20.<sha>.apk.sha256
+sha256sum -c GoldPin-1.4.10-23.<sha>.apk.sha256
 ```
 
 ## گرفتن فایل نصبی از GitHub Actions (بدون سیستم محلی)
@@ -91,10 +91,10 @@ sha256sum -c GoldPin-1.4.7-20.<sha>.apk.sha256
 [`.github/workflows/build.yml`](.github/workflows/build.yml):
 
 1. تب **Actions** ← آخرین اجرای «Build APK» (یا *Run workflow* ← *Run*).
-2. پایین صفحه ← **Artifacts** ← `GoldPin-1.4.7-apk` را دانلود کن.
-3. از zip بیرون بیاور → `GoldPin-1.4.7-20.<sha>.apk` نصب‌شدنی است (امضاشده ، همراه `sha256`).
+2. پایین صفحه ← **Artifacts** ← `GoldPin-1.4.10-apk` را دانلود کن.
+3. از zip بیرون بیاور → `GoldPin-1.4.10-23.<sha>.apk` نصب‌شدنی است (امضاشده ، همراه `sha256`).
 
-برای انتشار ماندگار: `git tag v1.4.4 && git push origin v1.4.4` → فایل در **Releases** قرار می‌گیرد.
+برای انتشار ماندگار: `git tag v1.4.10 && git push origin v1.4.10` → فایل در **Releases** قرار می‌گیرد.
 هر اجرای CI امضای APK را با `apksigner` تأیید می‌کند و آزمون‌ها را هم اجرا می‌کند
 (آزمون‌ها در job جدا هستند تا خرابی‌شان مانع گرفتن فایل نصبی نشود).
 

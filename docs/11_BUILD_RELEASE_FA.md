@@ -117,7 +117,7 @@ gradle :engine:test :app:testReleaseUnitTest :app:assembleRelease
 ⇒ مخزن عمومی از صفر بیلد می‌شود.
 
 ## ۹) نسخه‌گذاری
-* `versionName` در `app/build.gradle.kts` (نسخهٔ فعلی: **1.3.1**)
+* `versionName` در `app/build.gradle.kts` (نسخهٔ فعلی: **1.4.10**)
 * `versionCode` عدد صحیح افزایشی (۱٫۰ = 1، ۱٫۱ = 2، ۱٫۲ = 3، ۱٫۳ = 4، ۱٫۳٫۱ = 5)
 * هر نسخه: یک ورودی در `13_CHANGELOG_FA.md` + APK در ریشهٔ پروژهٔ تحویل + باندل ریپو
 
