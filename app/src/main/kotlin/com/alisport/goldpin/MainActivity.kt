@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private var chart: ChartView? = null
     private var chartInfo: TextView? = null
     private var eventsBox: LinearLayout? = null
+    private var chartBottomPanel: View? = null
     private var fullscreen = false
     private var bannerView: TextView? = null
     private var bannerHide: Runnable? = null
@@ -460,6 +461,7 @@ class MainActivity : Activity() {
             toast("دانلود تاریخچه (${Tf.label(s.chartTfSec)}) شروع شد…")
             s.downloadHistory { m -> toast(m) }
         })
+        topRow.addView(barChip("👁 اجزای چارت") { showChartElementsDialog() })
         topRow.addView(barChip("⋮ بیشتر") { showChartContextMenu() })
         col.addView(topBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         col.addView(divider())
@@ -495,6 +497,7 @@ class MainActivity : Activity() {
         chart = cv
         cv.chartTfSec = s.chartTfSec
         cv.symbolName = s.symbol
+        s.applyChartVis(cv)
         cv.onInfo = { txt -> chartInfo?.text = txt }
         cv.onGesture = { g -> Log.d(Log.CAT_UI, "ژست چارت: $g") }
         cv.onNeedOlder = { Log.d(Log.CAT_FEED, "به ابتدای داده رسیدیم — درخواست تاریخچهٔ بیشتر") }
@@ -505,8 +508,9 @@ class MainActivity : Activity() {
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Palette.panel)
-            visibility = if (fullscreen) View.GONE else View.VISIBLE
+            visibility = if (fullscreen || !s.showEventsPanel) View.GONE else View.VISIBLE
         }
+        chartBottomPanel = bottom
         col.addView(divider())
         chartInfo = Ui.tv(this,
             "دو انگشت: زوم هم‌زمان زمان و قیمت · یک انگشت: جابه‌جایی · محور قیمت: کشیدن = فشرده/باز، دو ضربه = خودکار · " +
@@ -526,12 +530,168 @@ class MainActivity : Activity() {
         return col
     }
 
+    private data class ChartToggleItem(val title: String, val get: () -> Boolean, val set: (Boolean) -> Unit)
+
+    private fun applyAndSaveChartVis() {
+        s.persistPrefs(this)
+        chart?.let {
+            s.applyChartVis(it)
+            it.invalidate()
+        }
+        chartBottomPanel?.visibility = if (fullscreen || !s.showEventsPanel) View.GONE else View.VISIBLE
+    }
+
+    private fun boxToggleItems(): List<ChartToggleItem> = listOf(
+        ChartToggleItem("نمایش باکس‌ها (کلید اصلی باکس‌ها)", { s.showZones }, { s.showZones = it }),
+        ChartToggleItem("باکس‌های ساختار فعال (سبز/قرمز)", { s.showActiveStructureBoxes }, { s.showActiveStructureBoxes = it }),
+        ChartToggleItem("باکس‌های ساختار پاک‌شده / شکسته (نارنجی)", { s.showDeletedStructureBoxes }, { s.showDeletedStructureBoxes = it }),
+        ChartToggleItem("باکس‌های ساختار ردشده (خاکستری)", { s.showRejectedStructureBoxes }, { s.showRejectedStructureBoxes = it }),
+        ChartToggleItem("باکس‌های تریگر ۱ — ولوم کم (طلایی)", { s.showTrigger1Boxes }, { s.showTrigger1Boxes = it }),
+        ChartToggleItem("باکس‌های تریگر ۲ — ولوم زیاد (فیروزه‌ای)", { s.showTrigger2Boxes }, { s.showTrigger2Boxes = it }),
+        ChartToggleItem("برچسب نوع و شماره روی باکس‌ها (Z1/Z2 و T1/T2)", { s.showBoxLabels }, { s.showBoxLabels = it })
+    )
+
+    private fun markerToggleItems(): List<ChartToggleItem> = listOf(
+        ChartToggleItem("نمایش لیبل‌ها و نشانگرها (کلید اصلی)", { s.showMarkers }, { s.showMarkers = it }),
+        ChartToggleItem("نشانگر پین و ساخت ناحیه (▲/▼ پین)", { s.showPinMarkers }, { s.showPinMarkers = it }),
+        ChartToggleItem("نشانگر برخورد اول به ناحیه (◆ برخورد)", { s.showTouchMarkers }, { s.showTouchMarkers = it }),
+        ChartToggleItem("نشانگر تایید کندل میانی (● میانی)", { s.showMidMarkers }, { s.showMidMarkers = it }),
+        ChartToggleItem("نشانگرهای تریگر ۱ — ولوم کم (◇/◆ ولوم کم)", { s.showTrigger1Markers }, { s.showTrigger1Markers = it }),
+        ChartToggleItem("نشانگرهای تریگر ۲ — ولوم زیاد (★/✦ ولوم زیاد)", { s.showTrigger2Markers }, { s.showTrigger2Markers = it }),
+        ChartToggleItem("نشانگرهای ورود و خروج معامله (ورود/SL/TP/BE)", { s.showTradeMarkers }, { s.showTradeMarkers = it }),
+        ChartToggleItem("نشانگرهای ابطال، شکست و رد ناحیه (✕)", { s.showInvalidationMarkers }, { s.showInvalidationMarkers = it }),
+        ChartToggleItem("متن توضیح کنار نشانگرها روی چارت", { s.showMarkerText }, { s.showMarkerText = it })
+    )
+
+    private fun lineToggleItems(): List<ChartToggleItem> = listOf(
+        ChartToggleItem("نمایش خطوط ستاپ و معامله (کلید اصلی)", { s.showTradeLines }, { s.showTradeLines = it }),
+        ChartToggleItem("خطوط سقف و کف ناحیهٔ ستاپ فعال", { s.showSetupZoneLines }, { s.showSetupZoneLines = it }),
+        ChartToggleItem("خط مرجع کندل میانی (مید)", { s.showMidLine }, { s.showMidLine = it }),
+        ChartToggleItem("خطوط محدودهٔ تریگر ۱ روی ستاپ (T1)", { s.showTrigger1Lines }, { s.showTrigger1Lines = it }),
+        ChartToggleItem("خطوط محدودهٔ تریگر ۲ روی ستاپ (T2)", { s.showTrigger2Lines }, { s.showTrigger2Lines = it }),
+        ChartToggleItem("خط قیمت ورود (Entry)", { s.showEntryLine }, { s.showEntryLine = it }),
+        ChartToggleItem("خط حد ضرر (SL)", { s.showSlLine }, { s.showSlLine = it }),
+        ChartToggleItem("خطوط حد سود پله‌ای (TP1 ۳۸٪ و TP2 ۵۰٪)", { s.showTpStepsLines }, { s.showTpStepsLines = it }),
+        ChartToggleItem("خط حد سود نهایی (TPX ۱٫۲۷۲)", { s.showTpFinalLine }, { s.showTpFinalLine = it }),
+        ChartToggleItem("خط بیشترین حجم (POC)", { s.showPocLine }, { s.showPocLine = it })
+    )
+
+    private fun baseToggleItems(): List<ChartToggleItem> = listOf(
+        ChartToggleItem("هیستوگرام حجم (پایین چارت)", { s.showVolume }, { s.showVolume = it }),
+        ChartToggleItem("هایلایت کندل‌های بدون حجم (حجم صفر)", { s.showZeroVolumeHighlight }, { s.showZeroVolumeHighlight = it }),
+        ChartToggleItem("خطوط شبکهٔ قیمت و زمان (Grid)", { s.showGrid }, { s.showGrid = it }),
+        ChartToggleItem("خط و برچسب آخرین قیمت (Last Price)", { s.showLastPriceLine }, { s.showLastPriceLine = it }),
+        ChartToggleItem("واترمارک نماد و تایم‌فریم در پس‌زمینه", { s.showWatermark }, { s.showWatermark = it }),
+        ChartToggleItem("راهنمای رنگ‌ها در بالای چارت (Legend)", { s.showLegend }, { s.showLegend = it }),
+        ChartToggleItem("نوار وضعیت OHLC و شمارندهٔ باکس‌ها در هدر چارت", { s.showStatusBadges }, { s.showStatusBadges = it }),
+        ChartToggleItem("پنل رخدادها و خلاصهٔ ستاپ در پایین چارت", { s.showEventsPanel }, { s.showEventsPanel = it })
+    )
+
+    private fun allChartToggleItems(): List<ChartToggleItem> =
+        boxToggleItems() + markerToggleItems() + lineToggleItems() + baseToggleItems()
+
+    private fun showCategoryToggleDialog(title: String, items: List<ChartToggleItem>, onDone: (() -> Unit)? = null) {
+        val labels = items.map { it.title }.toTypedArray()
+        val checked = items.map { it.get() }.toBooleanArray()
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                items[which].set(isChecked)
+                applyAndSaveChartVis()
+            }
+            .setPositiveButton("بستن") { _, _ -> onDone?.invoke() }
+            .setNeutralButton("روشن کردن همه") { _, _ ->
+                items.forEach { it.set(true) }
+                applyAndSaveChartVis()
+                onDone?.invoke()
+            }
+            .setNegativeButton("خاموش کردن همه") { _, _ ->
+                items.forEach { it.set(false) }
+                applyAndSaveChartVis()
+                onDone?.invoke()
+            }
+            .show()
+    }
+
+    private fun showBoxesVisibilityDialog(onDone: (() -> Unit)? = null) =
+        showCategoryToggleDialog("نمایش باکس‌ها (به تفکیک نوع)", boxToggleItems(), onDone)
+
+    private fun showMarkersVisibilityDialog(onDone: (() -> Unit)? = null) =
+        showCategoryToggleDialog("نمایش لیبل‌ها و نشانگرها (به تفکیک نوع)", markerToggleItems(), onDone)
+
+    private fun showLinesVisibilityDialog(onDone: (() -> Unit)? = null) =
+        showCategoryToggleDialog("نمایش خطوط و سطوح (به تفکیک نوع)", lineToggleItems(), onDone)
+
+    private fun showBaseVisibilityDialog(onDone: (() -> Unit)? = null) =
+        showCategoryToggleDialog("نمایش حجم و اجزای پایهٔ چارت", baseToggleItems(), onDone)
+
+    private fun showChartElementsDialog(onDone: (() -> Unit)? = null) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Ui.dp(this@MainActivity, 12f), Ui.dp(this@MainActivity, 8f),
+                Ui.dp(this@MainActivity, 12f), Ui.dp(this@MainActivity, 12f))
+        }
+        val switches = ArrayList<Pair<Switch, ChartToggleItem>>()
+        fun addGroup(headerTitle: String, items: List<ChartToggleItem>) {
+            box.addView(Ui.section(this, headerTitle))
+            for (item in items) {
+                val r = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, Ui.dp(this@MainActivity, 3f), 0, Ui.dp(this@MainActivity, 3f))
+                }
+                val t = Ui.tv(this, item.title, 11.5f, Palette.txt)
+                val sw = Switch(this).apply {
+                    isChecked = item.get()
+                    setOnCheckedChangeListener { _, b ->
+                        item.set(b)
+                        applyAndSaveChartVis()
+                    }
+                }
+                switches.add(sw to item)
+                r.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                r.addView(sw)
+                box.addView(r)
+            }
+        }
+        addGroup("۱) باکس‌ها (به تفکیک نوع)", boxToggleItems())
+        addGroup("۲) لیبل‌ها و نشانگرها (به تفکیک نوع)", markerToggleItems())
+        addGroup("۳) خطوط و سطوح (به تفکیک نوع)", lineToggleItems())
+        addGroup("۴) حجم و اجزای پایهٔ چارت", baseToggleItems())
+
+        AlertDialog.Builder(this)
+            .setTitle("تنظیم نمایش تک‌تک اجزای چارت")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("بستن") { _, _ -> onDone?.invoke() }
+            .setNeutralButton("روشن کردن همه") { _, _ ->
+                allChartToggleItems().forEach { it.set(true) }
+                applyAndSaveChartVis()
+                onDone?.invoke()
+            }
+            .setNegativeButton("خاموش کردن همه") { _, _ ->
+                allChartToggleItems().forEach { it.set(false) }
+                applyAndSaveChartVis()
+                onDone?.invoke()
+            }
+            .show()
+    }
+
     private fun showChartContextMenu() {
         val items = arrayOf(
-            "تنظیم نما (بازنشانی)", "مقیاس قیمت خودکار", "رفتن به آخرین کندل",
-            "زوم به داخل", "زوم به بیرون", if (fullscreen) "خروج از تمام‌صفحه" else "تمام‌صفحه",
-            "نمایش حجم", "نمایش باکس‌های ناحیه", "نمایش برچسب‌ها و خطوط معامله",
-            "رخدادهای موتور", "لاگ زنده (۳۰۰ خط آخر)", "تنظیمات چارت"
+            "تنظیم نما (بازنشانی)",
+            "مقیاس قیمت خودکار",
+            "رفتن به آخرین کندل",
+            "زوم به داخل",
+            "زوم به بیرون",
+            if (fullscreen) "خروج از تمام‌صفحه" else "تمام‌صفحه",
+            "تنظیم نمایش همهٔ اجزای چارت (تک‌به‌تک)…",
+            "تنظیم نمایش باکس‌ها (به تفکیک نوع)…",
+            "تنظیم نمایش لیبل‌ها و نشانگرها (به تفکیک نوع)…",
+            "تنظیم نمایش خطوط و سطوح (به تفکیک نوع)…",
+            "تنظیم نمایش حجم و اجزای پایهٔ چارت…",
+            "رخدادهای موتور",
+            "لاگ زنده (۳۰۰ خط آخر)",
+            "تنظیمات اپ"
         )
         AlertDialog.Builder(this).setTitle("منوی چارت").setItems(items) { _, i ->
             when (i) {
@@ -541,12 +701,14 @@ class MainActivity : Activity() {
                 3 -> chart?.zoomIn()
                 4 -> chart?.zoomOut()
                 5 -> setFullscreen(!fullscreen)
-                6 -> chart?.let { it.showVolume = !it.showVolume; it.invalidate() }
-                7 -> chart?.let { it.showZones = !it.showZones; it.invalidate() }
-                8 -> chart?.let { it.showMarkers = !it.showMarkers; it.showTradeLines = !it.showTradeLines; it.invalidate() }
-                9 -> showEventsDialog()
-                10 -> showLogViewer()
-                11 -> { showTab(4) }
+                6 -> showChartElementsDialog()
+                7 -> showBoxesVisibilityDialog()
+                8 -> showMarkersVisibilityDialog()
+                9 -> showLinesVisibilityDialog()
+                10 -> showBaseVisibilityDialog()
+                11 -> showEventsDialog()
+                12 -> showLogViewer()
+                13 -> { showTab(4) }
             }
         }.show()
     }
@@ -590,6 +752,8 @@ class MainActivity : Activity() {
         cv.livePulse = s.liveRunning
         cv.symbolName = s.symbol
         cv.chartTfSec = s.chartTfSec
+        s.applyChartVis(cv)
+        chartBottomPanel?.visibility = if (fullscreen || !s.showEventsPanel) View.GONE else View.VISIBLE
         cv.overlays = snap.setups.map { st ->
             SetupOverlay(
                 st.id, st.dir, st.stage, st.zTop, st.zBot, st.lvH, st.lvL, st.hvH, st.hvL,
@@ -835,11 +999,62 @@ class MainActivity : Activity() {
         scroll.addView(v)
 
         // ── نمایش چارت ──
-        v.addView(Ui.section(this, "⓪ نمایش چارت"))
+        v.addView(Ui.section(this, "⓪ نمایش چارت (کنترل تک‌به‌تک اجزا)"))
         v.addView(switchRow("ورود خودکار به تمام‌صفحه در تب چارت", s.autoFullscreen) { b ->
             s.autoFullscreen = b; s.persistPrefs(this)
             Log.i(Log.CAT_CFG, "تمام‌صفحهٔ خودکار = $b")
         })
+        val visQuickRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        visQuickRow1.addView(Ui.btn(this, "پنجرهٔ همهٔ اجزا…", Palette.panel2, Palette.txt, 11f).apply {
+            setOnClickListener { showChartElementsDialog { showTab(4) } }
+        })
+        visQuickRow1.addView(Ui.btn(this, "روشن کردن همه", Palette.panel2, Palette.up, 11f).apply {
+            setOnClickListener {
+                allChartToggleItems().forEach { it.set(true) }
+                applyAndSaveChartVis()
+                showTab(4)
+            }
+        })
+        visQuickRow1.addView(Ui.btn(this, "خاموش کردن همه", Palette.panel2, Palette.down, 11f).apply {
+            setOnClickListener {
+                allChartToggleItems().forEach { it.set(false) }
+                applyAndSaveChartVis()
+                showTab(4)
+            }
+        })
+        v.addView(visQuickRow1)
+
+        val visQuickRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        visQuickRow2.addView(Ui.btn(this, "باکس‌ها…", Palette.panel2, Palette.gold, 11f).apply {
+            setOnClickListener { showBoxesVisibilityDialog { showTab(4) } }
+        })
+        visQuickRow2.addView(Ui.btn(this, "لیبل‌ها…", Palette.panel2, Palette.gold, 11f).apply {
+            setOnClickListener { showMarkersVisibilityDialog { showTab(4) } }
+        })
+        visQuickRow2.addView(Ui.btn(this, "خطوط…", Palette.panel2, Palette.gold, 11f).apply {
+            setOnClickListener { showLinesVisibilityDialog { showTab(4) } }
+        })
+        visQuickRow2.addView(Ui.btn(this, "اجزای پایه…", Palette.panel2, Palette.gold, 11f).apply {
+            setOnClickListener { showBaseVisibilityDialog { showTab(4) } }
+        })
+        v.addView(visQuickRow2)
+
+        fun addSettingsToggleSubgroup(subTitle: String, items: List<ChartToggleItem>) {
+            v.addView(Ui.tv(this, subTitle, 11.5f, Palette.gold, true).apply {
+                setPadding(0, Ui.dp(this@MainActivity, 8f), 0, Ui.dp(this@MainActivity, 2f))
+            })
+            for (item in items) {
+                v.addView(switchRow(item.title, item.get()) { b ->
+                    item.set(b)
+                    applyAndSaveChartVis()
+                })
+            }
+        }
+        addSettingsToggleSubgroup("▫ باکس‌ها (به تفکیک نوع و وضعیت):", boxToggleItems())
+        addSettingsToggleSubgroup("▫ لیبل‌ها و نشانگرها (به تفکیک نوع):", markerToggleItems())
+        addSettingsToggleSubgroup("▫ خطوط ستاپ و سطوح معامله (به تفکیک نوع):", lineToggleItems())
+        addSettingsToggleSubgroup("▫ حجم و اجزای پایهٔ چارت:", baseToggleItems())
+
         v.addView(Ui.tv(this, "ژست‌های چارت: دو انگشت = زوم همزمان زمان و قیمت · یک انگشت = جابه‌جایی · " +
             "کشیدن روی محور قیمت = فشرده/باز کردن مقیاس · دو ضربه = بازنشانی نما · دو ضربه روی محور قیمت = مقیاس خودکار · " +
             "نگه‌داشتن = کراس‌هیر و منوی چارت", 10.5f, Palette.dim))

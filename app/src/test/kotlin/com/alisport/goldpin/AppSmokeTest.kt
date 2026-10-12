@@ -220,4 +220,78 @@ class AppSmokeTest {
         }
         c.pause().stop().destroy()
     }
+
+    @Test
+    fun `individual chart visibility toggles apply persist and render cleanly`() {
+        val ctx = org.robolectric.RuntimeEnvironment.getApplication()
+        val s = AppState()
+        s.initApp(ctx)
+
+        s.showActiveStructureBoxes = false
+        s.showDeletedStructureBoxes = true
+        s.showRejectedStructureBoxes = false
+        s.showTrigger1Boxes = true
+        s.showTrigger2Boxes = false
+        s.showBoxLabels = false
+        s.showPinMarkers = true
+        s.showTouchMarkers = false
+        s.showMidMarkers = true
+        s.showTrigger1Markers = false
+        s.showTrigger2Markers = true
+        s.showTradeMarkers = false
+        s.showInvalidationMarkers = false
+        s.showMarkerText = false
+        s.showSetupZoneLines = false
+        s.showMidLine = true
+        s.showTrigger1Lines = false
+        s.showTrigger2Lines = true
+        s.showEntryLine = true
+        s.showSlLine = false
+        s.showTpStepsLines = false
+        s.showTpFinalLine = true
+        s.showPocLine = false
+        s.showVolume = false
+        s.showZeroVolumeHighlight = false
+        s.showGrid = false
+        s.showLastPriceLine = false
+        s.showWatermark = false
+        s.showLegend = false
+        s.showStatusBadges = false
+        s.showEventsPanel = false
+        s.persistPrefs(ctx)
+
+        val s2 = AppState()
+        s2.initApp(ctx)
+        assertEquals(false, s2.showActiveStructureBoxes)
+        assertEquals(true, s2.showDeletedStructureBoxes)
+        assertEquals(false, s2.showRejectedStructureBoxes)
+        assertEquals(true, s2.showTrigger1Boxes)
+        assertEquals(false, s2.showTrigger2Boxes)
+        assertEquals(false, s2.showBoxLabels)
+        assertEquals(false, s2.showTouchMarkers)
+        assertEquals(false, s2.showTrigger1Markers)
+        assertEquals(false, s2.showTradeMarkers)
+        assertEquals(false, s2.showInvalidationMarkers)
+        assertEquals(false, s2.showMarkerText)
+        assertEquals(false, s2.showSetupZoneLines)
+        assertEquals(false, s2.showTrigger1Lines)
+        assertEquals(false, s2.showSlLine)
+        assertEquals(false, s2.showTpStepsLines)
+        assertEquals(false, s2.showPocLine)
+        assertEquals(false, s2.showVolume)
+        assertEquals(false, s2.showGrid)
+        assertEquals(false, s2.showLastPriceLine)
+        assertEquals(false, s2.showWatermark)
+        assertEquals(false, s2.showLegend)
+        assertEquals(false, s2.showStatusBadges)
+        assertEquals(false, s2.showEventsPanel)
+
+        val cv = ChartView(ctx)
+        s2.applyChartVis(cv)
+        assertEquals(false, cv.showActiveStructureBoxes)
+        assertEquals(false, cv.showTrigger2Boxes)
+        assertEquals(false, cv.showTouchMarkers)
+        assertEquals(false, cv.showSlLine)
+        assertEquals(false, cv.showGrid)
+    }
 }

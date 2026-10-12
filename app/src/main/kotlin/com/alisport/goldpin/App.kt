@@ -82,6 +82,45 @@ class AppState {
     @Volatile var busyText: String = ""
     /** ورود خودکار به تمام‌صفحه در تب چارت */
     var autoFullscreen: Boolean = false
+    /** تنظیمات نمایش تک‌تک اجزای چارت (باکس‌ها، لیبل‌ها، خطوط و اجزای پایه به تفکیک نوع) */
+    var showVolume: Boolean = true
+    var showZeroVolumeHighlight: Boolean = true
+    var showZones: Boolean = true
+    var showActiveStructureBoxes: Boolean = true
+    var showDeletedStructureBoxes: Boolean = true
+    var showRejectedStructureBoxes: Boolean = true
+    var showTrigger1Boxes: Boolean = true
+    var showTrigger2Boxes: Boolean = true
+    var showBoxLabels: Boolean = true
+
+    var showMarkers: Boolean = true
+    var showPinMarkers: Boolean = true
+    var showTouchMarkers: Boolean = true
+    var showMidMarkers: Boolean = true
+    var showTrigger1Markers: Boolean = true
+    var showTrigger2Markers: Boolean = true
+    var showTradeMarkers: Boolean = true
+    var showInvalidationMarkers: Boolean = true
+    var showMarkerText: Boolean = true
+
+    var showTradeLines: Boolean = true
+    var showSetupZoneLines: Boolean = true
+    var showMidLine: Boolean = true
+    var showTrigger1Lines: Boolean = true
+    var showTrigger2Lines: Boolean = true
+    var showEntryLine: Boolean = true
+    var showSlLine: Boolean = true
+    var showTpStepsLines: Boolean = true
+    var showTpFinalLine: Boolean = true
+    var showPocLine: Boolean = true
+
+    var showGrid: Boolean = true
+    var showLastPriceLine: Boolean = true
+    var showWatermark: Boolean = true
+    var showLegend: Boolean = true
+    var showStatusBadges: Boolean = true
+    var showEventsPanel: Boolean = true
+
     private var appCtx: Context? = null
     @Volatile private var lastSyntheticVolumeNoticeAt: Long = 0L
 
@@ -177,7 +216,7 @@ class AppState {
     /** راه‌اندازی لاگر و هشدارها + وصل کردن آن‌ها به موتور و کارگزار */
     fun initApp(ctx: Context) {
         appCtx = ctx.applicationContext
-        Log.init(appCtx!!, "1.4.12")
+        Log.init(appCtx!!, "1.4.13")
         Alerts.init(appCtx!!)
         val p = appCtx!!.getSharedPreferences("goldpin", Context.MODE_PRIVATE)
         // مهاجرت ۱٫۱ → ۱٫۲: تمام‌صفحهٔ خودکار دیگر پیش‌فرض نیست؛ تنظیم قدیمی true را یک‌بار خاموش کن.
@@ -186,6 +225,40 @@ class AppState {
         if (uiVersion < 2) p.edit().putBoolean("auto_fullscreen", false).putInt("ui_prefs_version", 2).apply()
         Feed.connectTimeoutMs = p.getInt("feed_connect_timeout_ms", 8000).coerceIn(1000, 120000)
         Feed.readTimeoutMs = p.getInt("feed_read_timeout_ms", 12000).coerceIn(1000, 120000)
+        showVolume = p.getBoolean("cv_show_volume", true)
+        showZeroVolumeHighlight = p.getBoolean("cv_show_zero_vol", true)
+        showZones = p.getBoolean("cv_show_zones", true)
+        showActiveStructureBoxes = p.getBoolean("cv_show_active_s_boxes", true)
+        showDeletedStructureBoxes = p.getBoolean("cv_show_deleted_s_boxes", true)
+        showRejectedStructureBoxes = p.getBoolean("cv_show_rejected_s_boxes", true)
+        showTrigger1Boxes = p.getBoolean("cv_show_t1_boxes", true)
+        showTrigger2Boxes = p.getBoolean("cv_show_t2_boxes", true)
+        showBoxLabels = p.getBoolean("cv_show_box_labels", true)
+        showMarkers = p.getBoolean("cv_show_markers", true)
+        showPinMarkers = p.getBoolean("cv_show_pin_markers", true)
+        showTouchMarkers = p.getBoolean("cv_show_touch_markers", true)
+        showMidMarkers = p.getBoolean("cv_show_mid_markers", true)
+        showTrigger1Markers = p.getBoolean("cv_show_t1_markers", true)
+        showTrigger2Markers = p.getBoolean("cv_show_t2_markers", true)
+        showTradeMarkers = p.getBoolean("cv_show_trade_markers", true)
+        showInvalidationMarkers = p.getBoolean("cv_show_inv_markers", true)
+        showMarkerText = p.getBoolean("cv_show_marker_text", true)
+        showTradeLines = p.getBoolean("cv_show_trade_lines", true)
+        showSetupZoneLines = p.getBoolean("cv_show_setup_zone_lines", true)
+        showMidLine = p.getBoolean("cv_show_mid_line", true)
+        showTrigger1Lines = p.getBoolean("cv_show_t1_lines", true)
+        showTrigger2Lines = p.getBoolean("cv_show_t2_lines", true)
+        showEntryLine = p.getBoolean("cv_show_entry_line", true)
+        showSlLine = p.getBoolean("cv_show_sl_line", true)
+        showTpStepsLines = p.getBoolean("cv_show_tp_steps_lines", true)
+        showTpFinalLine = p.getBoolean("cv_show_tp_final_line", true)
+        showPocLine = p.getBoolean("cv_show_poc_line", true)
+        showGrid = p.getBoolean("cv_show_grid", true)
+        showLastPriceLine = p.getBoolean("cv_show_last_price_line", true)
+        showWatermark = p.getBoolean("cv_show_watermark", true)
+        showLegend = p.getBoolean("cv_show_legend", true)
+        showStatusBadges = p.getBoolean("cv_show_status_badges", true)
+        showEventsPanel = p.getBoolean("cv_show_events_panel", true)
         Feed.syntheticVolumeWarning = { count -> announceSyntheticVolume(count) }
         Log.i(Log.CAT_APP, "AppState راه‌اندازی شد",
             "autoFullscreen=$autoFullscreen logEnabled=${Log.enabled} alerts=${Alerts.enabled}")
@@ -197,7 +270,77 @@ class AppState {
             .putBoolean("auto_fullscreen", autoFullscreen)
             .putInt("feed_connect_timeout_ms", Feed.connectTimeoutMs)
             .putInt("feed_read_timeout_ms", Feed.readTimeoutMs)
+            .putBoolean("cv_show_volume", showVolume)
+            .putBoolean("cv_show_zero_vol", showZeroVolumeHighlight)
+            .putBoolean("cv_show_zones", showZones)
+            .putBoolean("cv_show_active_s_boxes", showActiveStructureBoxes)
+            .putBoolean("cv_show_deleted_s_boxes", showDeletedStructureBoxes)
+            .putBoolean("cv_show_rejected_s_boxes", showRejectedStructureBoxes)
+            .putBoolean("cv_show_t1_boxes", showTrigger1Boxes)
+            .putBoolean("cv_show_t2_boxes", showTrigger2Boxes)
+            .putBoolean("cv_show_box_labels", showBoxLabels)
+            .putBoolean("cv_show_markers", showMarkers)
+            .putBoolean("cv_show_pin_markers", showPinMarkers)
+            .putBoolean("cv_show_touch_markers", showTouchMarkers)
+            .putBoolean("cv_show_mid_markers", showMidMarkers)
+            .putBoolean("cv_show_t1_markers", showTrigger1Markers)
+            .putBoolean("cv_show_t2_markers", showTrigger2Markers)
+            .putBoolean("cv_show_trade_markers", showTradeMarkers)
+            .putBoolean("cv_show_inv_markers", showInvalidationMarkers)
+            .putBoolean("cv_show_marker_text", showMarkerText)
+            .putBoolean("cv_show_trade_lines", showTradeLines)
+            .putBoolean("cv_show_setup_zone_lines", showSetupZoneLines)
+            .putBoolean("cv_show_mid_line", showMidLine)
+            .putBoolean("cv_show_t1_lines", showTrigger1Lines)
+            .putBoolean("cv_show_t2_lines", showTrigger2Lines)
+            .putBoolean("cv_show_entry_line", showEntryLine)
+            .putBoolean("cv_show_sl_line", showSlLine)
+            .putBoolean("cv_show_tp_steps_lines", showTpStepsLines)
+            .putBoolean("cv_show_tp_final_line", showTpFinalLine)
+            .putBoolean("cv_show_poc_line", showPocLine)
+            .putBoolean("cv_show_grid", showGrid)
+            .putBoolean("cv_show_last_price_line", showLastPriceLine)
+            .putBoolean("cv_show_watermark", showWatermark)
+            .putBoolean("cv_show_legend", showLegend)
+            .putBoolean("cv_show_status_badges", showStatusBadges)
+            .putBoolean("cv_show_events_panel", showEventsPanel)
             .apply()
+    }
+
+    fun applyChartVis(cv: com.alisport.goldpin.ui.ChartView) {
+        cv.showVolume = showVolume
+        cv.showZeroVolumeHighlight = showZeroVolumeHighlight
+        cv.showZones = showZones
+        cv.showActiveStructureBoxes = showActiveStructureBoxes
+        cv.showDeletedStructureBoxes = showDeletedStructureBoxes
+        cv.showRejectedStructureBoxes = showRejectedStructureBoxes
+        cv.showTrigger1Boxes = showTrigger1Boxes
+        cv.showTrigger2Boxes = showTrigger2Boxes
+        cv.showBoxLabels = showBoxLabels
+        cv.showMarkers = showMarkers
+        cv.showPinMarkers = showPinMarkers
+        cv.showTouchMarkers = showTouchMarkers
+        cv.showMidMarkers = showMidMarkers
+        cv.showTrigger1Markers = showTrigger1Markers
+        cv.showTrigger2Markers = showTrigger2Markers
+        cv.showTradeMarkers = showTradeMarkers
+        cv.showInvalidationMarkers = showInvalidationMarkers
+        cv.showMarkerText = showMarkerText
+        cv.showTradeLines = showTradeLines
+        cv.showSetupZoneLines = showSetupZoneLines
+        cv.showMidLine = showMidLine
+        cv.showTrigger1Lines = showTrigger1Lines
+        cv.showTrigger2Lines = showTrigger2Lines
+        cv.showEntryLine = showEntryLine
+        cv.showSlLine = showSlLine
+        cv.showTpStepsLines = showTpStepsLines
+        cv.showTpFinalLine = showTpFinalLine
+        cv.showPocLine = showPocLine
+        cv.showGrid = showGrid
+        cv.showLastPriceLine = showLastPriceLine
+        cv.showWatermark = showWatermark
+        cv.showLegend = showLegend
+        cv.showStatusBadges = showStatusBadges
     }
 
     @Synchronized

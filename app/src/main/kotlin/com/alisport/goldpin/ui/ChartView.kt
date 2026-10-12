@@ -94,14 +94,43 @@ class ChartView @JvmOverloads constructor(
     /** نام نماد برای لِجند */
     var symbolName: String = "GC=F"
 
-    // ── تنظیمات نمایش ──────────────────────────────────────────────────────────
+    // ── تنظیمات نمایش (کلی + جزئی به تفکیک هر جزء) ─────────────────────────────
     var showVolume = true
+    var showZeroVolumeHighlight = true
     var showZones = true
+    var showActiveStructureBoxes = true
+    var showDeletedStructureBoxes = true
+    var showRejectedStructureBoxes = true
+    var showTrigger1Boxes = true
+    var showTrigger2Boxes = true
+    var showBoxLabels = true
+
     var showMarkers = true
-    var showGrid = true
+    var showPinMarkers = true
+    var showTouchMarkers = true
+    var showMidMarkers = true
+    var showTrigger1Markers = true
+    var showTrigger2Markers = true
+    var showTradeMarkers = true
+    var showInvalidationMarkers = true
+    var showMarkerText = true
+
     var showTradeLines = true
+    var showSetupZoneLines = true
+    var showMidLine = true
+    var showTrigger1Lines = true
+    var showTrigger2Lines = true
+    var showEntryLine = true
+    var showSlLine = true
+    var showTpStepsLines = true
+    var showTpFinalLine = true
+    var showPocLine = true
+
+    var showGrid = true
+    var showLastPriceLine = true
     var showWatermark = true
     var showLegend = true
+    var showStatusBadges = true
     /** نشانگر به‌روزرسانی زنده */
     var livePulse = false
 
@@ -415,34 +444,55 @@ class ChartView @JvmOverloads constructor(
         }
         if (lo == Double.MAX_VALUE) { lo = 0.0; hi = 1.0 }
         val firstT = if (candles.isNotEmpty()) candles.first().t else 0L
-        for (z in zones) {
-            if (z.status == ZoneStatus.CAP) continue
-            if (z.status != ZoneStatus.ACTIVE && z.endT > 0L && z.endT < firstT) continue
-            val sBi = idxOfTime(z.createdT, z.createdBi)
-            val eBi = if (z.status == ZoneStatus.ACTIVE) candles.size - 1 else idxOfTime(z.endT, z.endBi)
-            if (sBi <= to && eBi >= from) {
-                if (z.bot < lo) lo = z.bot
-                if (z.top > hi) hi = z.top
+        if (showZones) {
+            for (z in zones) {
+                if (z.status == ZoneStatus.CAP) continue
+                if (z.status == ZoneStatus.ACTIVE && !showActiveStructureBoxes) continue
+                if (z.status == ZoneStatus.REJECTED && !showRejectedStructureBoxes) continue
+                if ((z.status == ZoneStatus.DELETED || z.status == ZoneStatus.CONSUMED) && !showDeletedStructureBoxes) continue
+                if (z.status != ZoneStatus.ACTIVE && z.endT > 0L && z.endT < firstT) continue
+                val sBi = idxOfTime(z.createdT, z.createdBi)
+                val eBi = if (z.status == ZoneStatus.ACTIVE) candles.size - 1 else idxOfTime(z.endT, z.endBi)
+                if (sBi <= to && eBi >= from) {
+                    if (z.bot < lo) lo = z.bot
+                    if (z.top > hi) hi = z.top
+                }
             }
-        }
-        for (z in t1Zones) {
-            if (z.status != ZoneStatus.ACTIVE) continue
-            val sBi = idxOfTime(z.createdT, z.createdBi)
-            if (sBi <= to) {
-                if (z.bot < lo) lo = z.bot
-                if (z.top > hi) hi = z.top
+            if (showTrigger1Boxes) {
+                for (z in t1Zones) {
+                    if (z.status != ZoneStatus.ACTIVE) continue
+                    val sBi = idxOfTime(z.createdT, z.createdBi)
+                    if (sBi <= to) {
+                        if (z.bot < lo) lo = z.bot
+                        if (z.top > hi) hi = z.top
+                    }
+                }
             }
-        }
-        for (z in t2Zones) {
-            if (z.status != ZoneStatus.ACTIVE) continue
-            val sBi = idxOfTime(z.createdT, z.createdBi)
-            if (sBi <= to) {
-                if (z.bot < lo) lo = z.bot
-                if (z.top > hi) hi = z.top
+            if (showTrigger2Boxes) {
+                for (z in t2Zones) {
+                    if (z.status != ZoneStatus.ACTIVE) continue
+                    val sBi = idxOfTime(z.createdT, z.createdBi)
+                    if (sBi <= to) {
+                        if (z.bot < lo) lo = z.bot
+                        if (z.top > hi) hi = z.top
+                    }
+                }
             }
         }
         if (showTradeLines) for (o in overlays) {
-            val arr = doubleArrayOf(o.zTop, o.zBot, o.lvH, o.lvL, o.hvH, o.hvL, o.entry, o.sl, o.tp1, o.tp2, o.tpx)
+            val arr = doubleArrayOf(
+                if (showSetupZoneLines) o.zTop else Double.NaN,
+                if (showSetupZoneLines) o.zBot else Double.NaN,
+                if (showTrigger1Lines) o.lvH else Double.NaN,
+                if (showTrigger1Lines) o.lvL else Double.NaN,
+                if (showTrigger2Lines) o.hvH else Double.NaN,
+                if (showTrigger2Lines) o.hvL else Double.NaN,
+                if (showEntryLine) o.entry else Double.NaN,
+                if (showSlLine) o.sl else Double.NaN,
+                if (showTpStepsLines) o.tp1 else Double.NaN,
+                if (showTpStepsLines) o.tp2 else Double.NaN,
+                if (showTpFinalLine) o.tpx else Double.NaN
+            )
             for (v in arr) if (!v.isNaN()) { if (v < lo) lo = v; if (v > hi) hi = v }
         }
         return lo to hi
@@ -790,10 +840,12 @@ class ChartView @JvmOverloads constructor(
                 if (x < -barW || x > plotW + barW) continue
                 val w = max(barW * 0.7f, 1f)
                 if (c.v <= 0.0) {
-                    // §6 سند نهایی: کندل‌هایی که حجم صفر دارند روی چارت حجم با رنگ متمایز مشخص می‌شوند
-                    val zeroH = max(volH * 0.15f, Ui.dp(context, 4f).toFloat())
-                    pVol.color = (Palette.gold and 0x00FFFFFF) or 0xCC000000.toInt()
-                    canvas.drawRect(x - w / 2f, base - zeroH, x + w / 2f, base, pVol)
+                    if (showZeroVolumeHighlight) {
+                        // §6 سند نهایی: کندل‌هایی که حجم صفر دارند روی چارت حجم با رنگ متمایز مشخص می‌شوند
+                        val zeroH = max(volH * 0.15f, Ui.dp(context, 4f).toFloat())
+                        pVol.color = (Palette.gold and 0x00FFFFFF) or 0xCC000000.toInt()
+                        canvas.drawRect(x - w / 2f, base - zeroH, x + w / 2f, base, pVol)
+                    }
                 } else if (maxV > 0) {
                     val bh = (c.v / maxV * volH).toFloat()
                     pVol.color = (if (c.c >= c.o) upCol else dnCol) and 0x66FFFFFF
@@ -807,7 +859,7 @@ class ChartView @JvmOverloads constructor(
         if (showZones) drawZones(canvas, from, to, priceH)
 
         // ── POC ──
-        if (!pocPrice.isNaN()) {
+        if (showPocLine && !pocPrice.isNaN()) {
             val y = yOf(pocPrice)
             if (y in 0f..priceH) {
                 canvas.drawLine(0f, y, plotW, y, pPoc)
@@ -871,22 +923,24 @@ class ChartView @JvmOverloads constructor(
         }
 
         // ── برچسب آخرین قیمت ──
-        val last = candles.last()
-        val lastY = yOf(last.c)
-        if (lastY in 0f..priceH) {
-            val up = last.c >= last.o
-            pDashed.color = if (up) upCol else dnCol
-            canvas.drawLine(0f, lastY, plotW, lastY, pDashed)
-            val txt = fmtPrice(last.c)
-            pLabelBg.color = (if (up) upCol else dnCol) and 0x00FFFFFF or 0xFF000000.toInt()
-            val tw = pLabelTxt.measureText(txt) + Ui.dp(context, 8f)
-            canvas.drawRoundRect(RectF(plotW + 1f, lastY - Ui.dp(context, 8f), plotW + tw, lastY + Ui.dp(context, 8f)),
-                Ui.dp(context, 2f).toFloat(), Ui.dp(context, 2f).toFloat(), pLabelBg)
-            canvas.drawText(txt, plotW + Ui.dp(context, 4f), lastY + Ui.dp(context, 3.5f), pLabelTxt)
+        if (showLastPriceLine) {
+            val last = candles.last()
+            val lastY = yOf(last.c)
+            if (lastY in 0f..priceH) {
+                val up = last.c >= last.o
+                pDashed.color = if (up) upCol else dnCol
+                canvas.drawLine(0f, lastY, plotW, lastY, pDashed)
+                val txt = fmtPrice(last.c)
+                pLabelBg.color = (if (up) upCol else dnCol) and 0x00FFFFFF or 0xFF000000.toInt()
+                val tw = pLabelTxt.measureText(txt) + Ui.dp(context, 8f)
+                canvas.drawRoundRect(RectF(plotW + 1f, lastY - Ui.dp(context, 8f), plotW + tw, lastY + Ui.dp(context, 8f)),
+                    Ui.dp(context, 2f).toFloat(), Ui.dp(context, 2f).toFloat(), pLabelBg)
+                canvas.drawText(txt, plotW + Ui.dp(context, 4f), lastY + Ui.dp(context, 3.5f), pLabelTxt)
+            }
         }
 
         // ── نشانگر مقیاس خودکار ──
-        if (autoPrice) {
+        if (showStatusBadges && autoPrice) {
             canvas.drawText("خودکار", plotW + Ui.dp(context, 4f), Ui.dp(context, 12f).toFloat(), pAuto)
         }
 
@@ -906,7 +960,7 @@ class ChartView @JvmOverloads constructor(
         }
 
         // ── نشانگر لایو ──
-        if (livePulse && followLive) {
+        if (showStatusBadges && livePulse && followLive) {
             val r = Ui.dp(context, 3f).toFloat()
             canvas.drawCircle(plotW - r * 3, Ui.dp(context, 10f).toFloat(), r, pBody.apply { color = upCol })
         }
@@ -983,6 +1037,9 @@ class ChartView @JvmOverloads constructor(
         val firstT = if (candles.isNotEmpty()) candles.first().t else 0L
         for (z in zones) {
             if (z.status == ZoneStatus.CAP) continue
+            if (z.status == ZoneStatus.ACTIVE && !showActiveStructureBoxes) continue
+            if (z.status == ZoneStatus.REJECTED && !showRejectedStructureBoxes) continue
+            if ((z.status == ZoneStatus.DELETED || z.status == ZoneStatus.CONSUMED) && !showDeletedStructureBoxes) continue
             if (z.status != ZoneStatus.ACTIVE && z.endT > 0L && z.endT < firstT) continue
             val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
             val endIdx = if (z.status == ZoneStatus.ACTIVE) rightIdx + 2f else idxOfTime(z.endT, z.endBi).toFloat()
@@ -996,7 +1053,7 @@ class ChartView @JvmOverloads constructor(
             val active = z.status == ZoneStatus.ACTIVE
             val color = when {
                 z.status == ZoneStatus.REJECTED -> Color.parseColor("#7A8798")
-                z.status == ZoneStatus.DELETED -> Color.parseColor("#5A6472")
+                z.status == ZoneStatus.DELETED || z.status == ZoneStatus.CONSUMED -> Color.parseColor("#5A6472")
                 z.dir == 1 -> upCol
                 else -> Color.parseColor("#FF8A3D")
             }
@@ -1007,7 +1064,7 @@ class ChartView @JvmOverloads constructor(
             lp.color = (color and 0x00FFFFFF) or (if (active) 0xB0000000.toInt() else 0x55000000)
             canvas.drawLine(left, yT, right, yT, lp)
             canvas.drawLine(left, yB, right, yB, lp)
-            if (active && barW > 3.5f) {
+            if (showBoxLabels && active && barW > 3.5f) {
                 pLabelBg.color = (color and 0x00FFFFFF) or 0xB0000000.toInt()
                 canvas.drawRoundRect(
                     RectF(left + 2f, yT + 2f, left + Ui.dp(context, 30f), yT + Ui.dp(context, 15f)),
@@ -1017,45 +1074,77 @@ class ChartView @JvmOverloads constructor(
             }
         }
         // باکس‌های تاییدشدهٔ تریگر ۱ (ولوم کم) و تریگر ۲ (ولوم زیاد) ثبت‌شده در حافظهٔ مود انتخاب‌شده
-        for (z in t1Zones) {
-            if (z.status != ZoneStatus.ACTIVE) continue
-            val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
-            val x1 = xOf(startIdx)
-            val x2 = xOf(rightIdx + 2f)
-            if (x2 < -barW || x1 > plotW + barW) continue
-            val left = max(min(x1, x2), -barW)
-            val right = min(max(x1, x2), plotW + barW)
-            val yT = yOf(z.top)
-            val yB = yOf(z.bot)
-            pZoneFill.color = (Palette.gold and 0x00FFFFFF) or (28 shl 24)
-            pZoneFill.style = Paint.Style.FILL
-            canvas.drawRect(left, yT, right, yB, pZoneFill)
-            pDotted.color = (Palette.gold and 0x00FFFFFF) or 0xB0000000.toInt()
-            canvas.drawLine(left, yT, right, yT, pDotted)
-            canvas.drawLine(left, yB, right, yB, pDotted)
+        if (showTrigger1Boxes) {
+            for (z in t1Zones) {
+                if (z.status != ZoneStatus.ACTIVE) continue
+                val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
+                val x1 = xOf(startIdx)
+                val x2 = xOf(rightIdx + 2f)
+                if (x2 < -barW || x1 > plotW + barW) continue
+                val left = max(min(x1, x2), -barW)
+                val right = min(max(x1, x2), plotW + barW)
+                val yT = yOf(z.top)
+                val yB = yOf(z.bot)
+                pZoneFill.color = (Palette.gold and 0x00FFFFFF) or (28 shl 24)
+                pZoneFill.style = Paint.Style.FILL
+                canvas.drawRect(left, yT, right, yB, pZoneFill)
+                pDotted.color = (Palette.gold and 0x00FFFFFF) or 0xB0000000.toInt()
+                canvas.drawLine(left, yT, right, yT, pDotted)
+                canvas.drawLine(left, yB, right, yB, pDotted)
+                if (showBoxLabels && barW > 3.5f) {
+                    pLabelBg.color = (Palette.gold and 0x00FFFFFF) or 0xB0000000.toInt()
+                    canvas.drawRoundRect(
+                        RectF(left + 2f, yT + 2f, left + Ui.dp(context, 28f), yT + Ui.dp(context, 15f)),
+                        Ui.dp(context, 3f).toFloat(), Ui.dp(context, 3f).toFloat(), pLabelBg
+                    )
+                    canvas.drawText("T1", left + Ui.dp(context, 5f), yT + Ui.dp(context, 12.5f), pLabelTxt)
+                }
+            }
         }
-        for (z in t2Zones) {
-            if (z.status != ZoneStatus.ACTIVE) continue
-            val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
-            val x1 = xOf(startIdx)
-            val x2 = xOf(rightIdx + 2f)
-            if (x2 < -barW || x1 > plotW + barW) continue
-            val left = max(min(x1, x2), -barW)
-            val right = min(max(x1, x2), plotW + barW)
-            val yT = yOf(z.top)
-            val yB = yOf(z.bot)
-            pZoneFill.color = (Palette.accent and 0x00FFFFFF) or (28 shl 24)
-            pZoneFill.style = Paint.Style.FILL
-            canvas.drawRect(left, yT, right, yB, pZoneFill)
-            pDotted.color = (Palette.accent and 0x00FFFFFF) or 0xB0000000.toInt()
-            canvas.drawLine(left, yT, right, yT, pDotted)
-            canvas.drawLine(left, yB, right, yB, pDotted)
+        if (showTrigger2Boxes) {
+            for (z in t2Zones) {
+                if (z.status != ZoneStatus.ACTIVE) continue
+                val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
+                val x1 = xOf(startIdx)
+                val x2 = xOf(rightIdx + 2f)
+                if (x2 < -barW || x1 > plotW + barW) continue
+                val left = max(min(x1, x2), -barW)
+                val right = min(max(x1, x2), plotW + barW)
+                val yT = yOf(z.top)
+                val yB = yOf(z.bot)
+                pZoneFill.color = (Palette.accent and 0x00FFFFFF) or (28 shl 24)
+                pZoneFill.style = Paint.Style.FILL
+                canvas.drawRect(left, yT, right, yB, pZoneFill)
+                pDotted.color = (Palette.accent and 0x00FFFFFF) or 0xB0000000.toInt()
+                canvas.drawLine(left, yT, right, yT, pDotted)
+                canvas.drawLine(left, yB, right, yB, pDotted)
+                if (showBoxLabels && barW > 3.5f) {
+                    pLabelBg.color = (Palette.accent and 0x00FFFFFF) or 0xB0000000.toInt()
+                    canvas.drawRoundRect(
+                        RectF(left + 2f, yT + 2f, left + Ui.dp(context, 28f), yT + Ui.dp(context, 15f)),
+                        Ui.dp(context, 3f).toFloat(), Ui.dp(context, 3f).toFloat(), pLabelBg
+                    )
+                    canvas.drawText("T2", left + Ui.dp(context, 5f), yT + Ui.dp(context, 12.5f), pLabelTxt)
+                }
+            }
         }
+    }
+
+    private fun isMarkerKindVisible(kind: Int): Boolean = when (kind) {
+        1, -1 -> showPinMarkers
+        2 -> showTouchMarkers
+        3 -> showMidMarkers
+        4, 5 -> showTrigger1Markers
+        6, 7 -> showTrigger2Markers
+        8, 9 -> showTradeMarkers
+        10, 11 -> showInvalidationMarkers
+        else -> true
     }
 
     private fun drawMarkers(canvas: Canvas, from: Int, to: Int, priceH: Float) {
         val firstT = if (candles.isNotEmpty()) candles.first().t else 0L
         for (m in markers) {
+            if (!isMarkerKindVisible(m.kind)) continue
             if (m.t > 0L && m.t < firstT) continue
             val mBi = idxOfTime(m.t, m.bi)
             if (mBi < from - 2 || mBi > to + 2) continue
@@ -1082,7 +1171,7 @@ class ChartView @JvmOverloads constructor(
             path.lineTo(x + r * 2, cy)
             path.close()
             canvas.drawPath(path, pBody)
-            if (barW > 4.2f && m.text.isNotEmpty() && m.kind != 2 && m.kind != 6) {
+            if (showMarkerText && barW > 4.2f && m.text.isNotEmpty() && m.kind != 2 && m.kind != 6) {
                 val t = m.text.lineSequence().first()
                 pTxtSm.color = col
                 canvas.drawText(t, x + r * 2.4f, cy, pTxtSm)
@@ -1110,33 +1199,41 @@ class ChartView @JvmOverloads constructor(
         for (o in overlays) {
             if (o.stage == 8) continue
             val zIdx = idxOfTime(o.zT, o.zBi).toFloat()
+            val midIdx = idxOfTime(if (o.midT > 0L) o.midT else o.zT, o.zBi).toFloat()
             val lvIdx = idxOfTime(if (o.lvT > 0L) o.lvT else o.zT, o.zBi).toFloat()
             val hvIdx = idxOfTime(if (o.hvT > 0L) o.hvT else o.zT, o.zBi).toFloat()
             val armIdx = idxOfTime(if (o.armT > 0L) o.armT else if (o.hvT > 0L) o.hvT else o.zT, o.zBi).toFloat()
-            line(o.zTop, Color.parseColor("#39B27C"), "ناحیه", zIdx)
-            line(o.zBot, Color.parseColor("#39B27C"), "", zIdx)
-            if (o.stage >= 4 && !o.lvUsed && o.lvConfBi >= 0) {
+            if (showSetupZoneLines) {
+                line(o.zTop, Color.parseColor("#39B27C"), "ناحیه", zIdx)
+                line(o.zBot, Color.parseColor("#39B27C"), "", zIdx)
+            }
+            if (showMidLine && !o.midRef.isNaN()) {
+                line(o.midRef, Color.parseColor("#BA68C8"), "تایید میانی", midIdx)
+            }
+            if (showTrigger1Lines && o.stage >= 4 && !o.lvUsed && o.lvConfBi >= 0) {
                 line(o.lvH, Palette.gold, "ولوم کم", lvIdx)
                 line(o.lvL, Palette.gold, "", lvIdx)
             }
-            if (o.stage >= 5 && !o.hvH.isNaN()) {
+            if (showTrigger2Lines && o.stage >= 5 && !o.hvH.isNaN()) {
                 line(o.hvH, Palette.accent, "ولوم زیاد", hvIdx)
                 line(o.hvL, Palette.accent, "", hvIdx)
             }
             if (o.stage >= 6) {
-                line(o.entry, upCol, "ورود", armIdx)
-                line(o.sl, dnCol, "حدضرر", armIdx)
-                line(o.tp1, Color.parseColor("#FFB74D"), "TP1", armIdx)
-                line(o.tp2, Color.parseColor("#FFB74D"), "TP2", armIdx)
-                line(o.tpx, Palette.violet, "TP نهایی", armIdx)
+                if (showEntryLine) line(o.entry, upCol, "ورود", armIdx)
+                if (showSlLine) line(o.sl, dnCol, "حدضرر", armIdx)
+                if (showTpStepsLines) {
+                    line(o.tp1, Color.parseColor("#FFB74D"), "TP1", armIdx)
+                    line(o.tp2, Color.parseColor("#FFB74D"), "TP2", armIdx)
+                }
+                if (showTpFinalLine) line(o.tpx, Palette.violet, "TP نهایی", armIdx)
             }
         }
         val t = trades.lastOrNull { it.open } ?: trades.lastOrNull()
         if (t != null) {
             val tIdx = idxOfTime(t.entryT, t.entryBi).toFloat()
-            line(t.entry, upCol, if (t.open) "ورود باز" else "ورود", tIdx)
-            line(if (t.be) t.entry else t.sl0, dnCol, if (t.be) "سربه‌سر" else "حدضرر", tIdx)
-            line(t.tpX, Palette.violet, "TP", tIdx)
+            if (showEntryLine) line(t.entry, upCol, if (t.open) "ورود باز" else "ورود", tIdx)
+            if (showSlLine) line(if (t.be) t.entry else t.sl0, dnCol, if (t.be) "سربه‌سر" else "حدضرر", tIdx)
+            if (showTpFinalLine) line(t.tpX, Palette.violet, "TP", tIdx)
         }
     }
 }
