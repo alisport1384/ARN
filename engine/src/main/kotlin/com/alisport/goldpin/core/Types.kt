@@ -41,6 +41,9 @@ class Agg {
             periods++
         } else if (cur == null) {
             cur = Candle(bi, t, o, h, l, c, v)
+            // اولین کندلِ موجود در تاریخچه هم یک عضو بازه است؛ آن را برای بستن
+            // در مرز بعدی بشمار تا ابتدای تاریخچه از تجمیع ساختار حذف نشود.
+            periods = maxOf(periods, 1)
         } else {
             val u = cur!!
             cur = Candle(u.bi, u.t, u.o, maxOf(u.h, h), minOf(u.l, l), c, u.v + v)
@@ -177,12 +180,30 @@ class Trade(
     }
 }
 
+/** نوع مارکر روی چارت؛ مقادیر عددی در فایل‌های ذخیره‌شده ثابت می‌مانند. */
+object MarkerKind {
+    const val PIN_BU = 1
+    const val PIN_BE = -1
+    const val TOUCH = 2
+    const val MID_CONFIRM = 3
+    const val TRIGGER1 = 4
+    const val TRIGGER1_CONFIRM = 5
+    const val TRIGGER2 = 6
+    const val ARMED = 7
+    const val ENTRY = 8
+    const val EXIT = 9
+    const val INVALIDATION = 10
+    const val TRIGGER1_USED = 11
+    const val TREND_UP = 12
+    const val TREND_DOWN = 13
+}
+
 /** مارکر روی چارت (برچسب‌های استراتژی) — ذخیره و بازیابی می‌شود. */
 class Marker(
     val t: Long,
     val bi: Int,
     val price: Double,
-    val kind: Int,          // 1 pinBU, -1 pinBE, 2 touch, 3 mid-confirm, 4 lv, 5 lv-confirm, 6 hv-mark, 7 armed, 8 entry, 9 exit, 10 invalid, 11 lv-used
+    val kind: Int,
     val text: String
 )
 

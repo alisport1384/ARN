@@ -7,11 +7,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.TextView
 import com.alisport.goldpin.core.Tf
 import com.alisport.goldpin.data.Feed
 import com.alisport.goldpin.ui.ChartView
 import com.alisport.goldpin.ui.EquityChartView
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -234,6 +236,7 @@ class AppSmokeTest {
         s.showTrigger2Boxes = false
         s.showBoxLabels = false
         s.showPinMarkers = true
+        s.showTrendMarkers = false
         s.showTouchMarkers = false
         s.showMidMarkers = true
         s.showTrigger1Markers = false
@@ -268,6 +271,7 @@ class AppSmokeTest {
         assertEquals(true, s2.showTrigger1Boxes)
         assertEquals(false, s2.showTrigger2Boxes)
         assertEquals(false, s2.showBoxLabels)
+        assertEquals(false, s2.showTrendMarkers)
         assertEquals(false, s2.showTouchMarkers)
         assertEquals(false, s2.showTrigger1Markers)
         assertEquals(false, s2.showTradeMarkers)
@@ -290,8 +294,41 @@ class AppSmokeTest {
         s2.applyChartVis(cv)
         assertEquals(false, cv.showActiveStructureBoxes)
         assertEquals(false, cv.showTrigger2Boxes)
+        assertEquals(false, cv.showTrendMarkers)
         assertEquals(false, cv.showTouchMarkers)
         assertEquals(false, cv.showSlLine)
         assertEquals(false, cv.showGrid)
+    }
+
+    @Test
+    fun `granular chart visibility stays in chart menu instead of app settings`() {
+        val c = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val act = c.get()
+        val content = act.window.decorView.findViewById<ViewGroup>(android.R.id.content)
+        val shell = content.getChildAt(0) as LinearLayout
+        val tabs = shell.getChildAt(2) as LinearLayout
+
+        fun texts(root: View): List<String> {
+            val out = ArrayList<String>()
+            fun walk(v: View) {
+                if (v is TextView) out.add(v.text?.toString().orEmpty())
+                if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+            }
+            walk(root)
+            return out
+        }
+
+        tabs.getChildAt(4).performClick()
+        idle()
+        val settingsText = texts(shell.getChildAt(1))
+        assertFalse(settingsText.any { it.contains("باکس‌های ساختار فعال") })
+        assertFalse(settingsText.any { it.contains("برچسب شروع و تغییر روند") })
+        assertFalse(settingsText.any { it.contains("خاموش کردن همه") })
+
+        tabs.getChildAt(0).performClick()
+        idle()
+        val chartText = texts(shell.getChildAt(1))
+        assertTrue("منوی اجزای چارت باید در تب خود چارت باشد", chartText.any { it.contains("اجزای چارت") })
+        c.pause().stop().destroy()
     }
 }

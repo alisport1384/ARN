@@ -188,6 +188,7 @@ class Engine(val cfg: Settings) {
         prevT1Vol = Double.NaN; zoneSeq = 0; setupSeq = 0
         processed = 0; curBi = -1; curT = 0; curVol = 0.0; prevChartVol = Double.NaN
         livePreview.clear(); liveCandle = null
+        times.clear()
     }
 
     // ── ورود داده ──────────────────────────────────────────────────────────────
@@ -216,6 +217,45 @@ class Engine(val cfg: Settings) {
     fun runAll(candles: List<Candle>) {
         reset()
         feed(candles, lastIsClosed = true)
+    }
+
+    /**
+     * پیش‌بارگذاری توالی‌های ساختار از تاریخچهٔ قدیمی‌ترِ تایم‌فریم ساختار.
+     * این بخش فقط پین‌ها، توالی و روند را بازسازی می‌کند؛ بدون کندل‌های تریگر۲
+     * هیچ پروفایل/باکس دقیقی ساخته نمی‌شود. کندل‌های هم‌پوشان با شروع تاریخچهٔ
+     * تریگر۲ کنار گذاشته می‌شوند تا با اجرای اصلی دوباره پردازش نشوند.
+     *
+     * ورودی باید از قبل به [cfg.tfS] تجمیع شده و مرتب زمانی باشد.
+     * ایندکس منفی باعث می‌شود تاریخچهٔ seed پیش از ایندکس‌های عادی تریگر۲ بماند،
+     * در حالی که مارکرها با زمان واقعی روی هر تایم‌فریم چارت نگاشت می‌شوند.
+     */
+    fun seedStructureHistory(structureCandles: List<Candle>, firstTrigger2Time: Long): Int {
+        if (structureCandles.isEmpty() || firstTrigger2Time <= 0L || processed != 0 ||
+            structBars.isNotEmpty() || markers.isNotEmpty()) return 0
+
+        val firstModeBucket = Tf.bucket(cfg.tfS, firstTrigger2Time)
+        val history = structureCandles.asSequence()
+            .sortedBy { it.t }
+            .map { c ->
+                val bucket = Tf.bucket(cfg.tfS, c.t)
+                Candle(c.bi, bucket, c.o, c.h, c.l, c.c, c.v)
+            }
+            .filter { it.t < firstModeBucket }
+            .distinctBy { it.t }
+            .toList()
+        if (history.isEmpty()) return 0
+
+        val firstBi = -history.size
+        for ((index, src) in history.withIndex()) {
+            val bi = firstBi + index
+            val bar = Candle(bi, src.t, src.o, src.h, src.l, src.c, src.v)
+            times[bi] = bar.t
+            curBi = bi
+            curT = bar.t + cfg.tfS * 1000L
+            curVol = bar.v
+            structureEngine(bar, buildZones = false)
+        }
+        return history.size
     }
 
     // ── پیش‌نمایش کندل باز (بدون تغییر وضعیت) ────────────────────────────────────
@@ -332,7 +372,9 @@ class Engine(val cfg: Settings) {
     // ═══════════════════════════════════════════════════════════════════════════
     //  ⑩ موتور ساختار (کندل مهم · Ready · pin · روند · ناحیه فیکس‌رنج)
     // ═══════════════════════════════════════════════════════════════════════════
-    private fun structureEngine(sb: Candle) {
+    private fun structureEngine(sb: Candle) = structureEngine(sb, buildZones = true)
+
+    private fun structureEngine(sb: Candle, buildZones: Boolean) {
         structBars.add(sb)
         while (structBars.size > 400) structBars.removeAt(0)
         val nS = structBars.size
@@ -470,7 +512,7 @@ class Engine(val cfg: Settings) {
                             "توالی کامل · کلوز ${f2(sb.c)} زیر کف tempbox ${f2(bot)}")
                     }
                 }
-                if (trend == 0 && sb.bi > 0) {
+                if (trend == 0) {
                     if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq) {
                         val crossedRef = sb.o < lastBUpinRef || sb.c < lastBUpinRef
                         val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
@@ -533,7 +575,7 @@ class Engine(val cfg: Settings) {
                         }
                     }
                     // ۳) ابطال pinBE بدون ثبت pinBU بعد از آن: HH و HL پاک می‌شوند و HL به pinBU برمی‌گردد
-                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq && sb.bi > 0) {
+                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq) {
                         val crossedRef = sb.o > lastBEpinRef || sb.c > lastBEpinRef
                         val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
                         if (crossedRef || crossedHigh) {
@@ -551,7 +593,7 @@ class Engine(val cfg: Settings) {
                         }
                     }
                     // ۴) ابطال pinBU بدون ثبت pinBE بعد از آن
-                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq && sb.bi > 0) {
+                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq) {
                         val crossedRef = sb.o < lastBUpinRef || sb.c < lastBUpinRef
                         val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
                         val closedBelowPin = !lastBUpin.isNaN() && sb.c < lastBUpin
@@ -604,7 +646,7 @@ class Engine(val cfg: Settings) {
                         }
                     }
                     // ۳) ابطال pinBU بدون ثبت pinBE بعد از آن: LL و LH پاک می‌شوند و LH به pinBE برمی‌گردد
-                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq && sb.bi > 0) {
+                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq) {
                         val crossedRef = sb.o < lastBUpinRef || sb.c < lastBUpinRef
                         val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
                         if (crossedRef || crossedLow) {
@@ -622,7 +664,7 @@ class Engine(val cfg: Settings) {
                         }
                     }
                     // ۴) ابطال pinBE بدون ثبت pinBU بعد از آن
-                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq && sb.bi > 0) {
+                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq) {
                         val crossedRef = sb.o > lastBEpinRef || sb.c > lastBEpinRef
                         val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
                         val closedAbovePin = !lastBEpin.isNaN() && sb.c > lastBEpin
@@ -643,8 +685,20 @@ class Engine(val cfg: Settings) {
             }
         }
 
+        if (evTrendUp || evTrendDn || evChgUp || evChgDn) {
+            markers.removeAll { it.text.startsWith("روند فعلی:") }
+        }
+        if (evTrendUp) addMarkerAtTime(curT, sb.bi, sb.c, MarkerKind.TREND_UP, "شروع روند صعودی ▲")
+        if (evTrendDn) addMarkerAtTime(curT, sb.bi, sb.c, MarkerKind.TREND_DOWN, "شروع روند نزولی ▼")
+        if (evChgUp) addMarkerAtTime(curT, sb.bi, sb.c, MarkerKind.TREND_UP, "چرخش روند: نزولی ← صعودی ▲")
+        if (evChgDn) addMarkerAtTime(curT, sb.bi, sb.c, MarkerKind.TREND_DOWN, "چرخش روند: صعودی ← نزولی ▼")
+
         if (evChgDn || evTrendDn) cancelDir(1)
         if (evChgUp || evTrendUp) cancelDir(-1)
+
+        // در پیش‌بارگذاری تاریخچهٔ ساختار، دیتای تریگر۲ نداریم؛ بنابراین فقط
+        // توالی/روند ثبت می‌شود و هیچ باکس پروفایل حدسی ساخته نمی‌شود.
+        if (!buildZones) return
 
         // ── پروفایل حجم فیکس‌رنج + ثبت ناحیه‌ها ──
         val bullC = sb.c > sb.o
@@ -1381,8 +1435,30 @@ class Engine(val cfg: Settings) {
 
     private fun addMarker(bi: Int, price: Double, kind: Int, text: String) {
         val t = times[bi] ?: curT
+        addMarkerAtTime(t, bi, price, kind, text)
+    }
+
+    /** علامت‌گذاری جهت روند فعلی هنگام بازسازی/بازیابیِ وضعیت قدیمی. */
+    fun ensureCurrentTrendMarker(t: Long, price: Double, bi: Int) {
+        if (trend == 0 || t <= 0L || price.isNaN()) return
+        val kind = if (trend > 0) MarkerKind.TREND_UP else MarkerKind.TREND_DOWN
+        markers.removeAll { it.text.startsWith("روند فعلی:") }
+        val text = if (trend > 0) "روند فعلی: صعودی ▲" else "روند فعلی: نزولی ▼"
+        addMarkerAtTime(t, bi, price, kind, text)
+    }
+
+    private fun addMarkerAtTime(t: Long, bi: Int, price: Double, kind: Int, text: String) {
         markers.add(Marker(t, bi, price, kind, text))
-        while (markers.size > 2000) markers.removeAt(0)
+        // توالی پین‌ها و شروع/چرخش روند تاریخچه‌اند و نباید با سقف مارکرهای
+        // جزئی حذف شوند؛ فقط مارکرهای رخدادهای پرتکرار قدیمی‌تر trim می‌شوند.
+        while (markers.size > 2000) {
+            val discard = markers.indexOfFirst {
+                it.kind != MarkerKind.PIN_BU && it.kind != MarkerKind.PIN_BE &&
+                    it.kind != MarkerKind.TREND_UP && it.kind != MarkerKind.TREND_DOWN
+            }
+            if (discard < 0) break
+            markers.removeAt(discard)
+        }
     }
 
     /** نگاشت ایندکس کندل → زمان (برای برچسب‌ها و ذخیره‌سازی). */

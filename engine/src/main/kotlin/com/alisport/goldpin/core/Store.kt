@@ -14,6 +14,7 @@ object Store {
         val eng: Engine,
         val broker: PaperBroker,
         val candles: List<Candle>,
+        val structureCandles: List<Candle>,
         val meta: Map<String, Any?>,
         val savedAt: Long
     )
@@ -26,7 +27,8 @@ object Store {
         candles: List<Candle>,
         meta: Map<String, Any?> = emptyMap(),
         savedAt: Long = System.currentTimeMillis(),
-        candleFrom: Int = 0
+        candleFrom: Int = 0,
+        structureCandles: List<Candle> = emptyList()
     ): String {
         val root = LinkedHashMap<String, Any?>()
         root["format"] = FORMAT
@@ -44,6 +46,7 @@ object Store {
         }
         root["candleFrom"] = from
         root["candles"] = cs
+        root["structureCandles"] = candleListTo(structureCandles)
         return Json.write(root)
     }
 
@@ -91,6 +94,9 @@ object Store {
     private fun aggFrom(m: Map<String, Any?>, key: String, a: Agg) {
         a.periods = m["${key}_periods"].asI()
         a.cur = candleFrom(m["${key}_cur"])
+        // فایل‌های قدیمی ممکن است در اولین بازه periods=0 ذخیره کرده باشند؛
+        // کندل جاری باید هنگام رسیدن کندل بعدی بسته شود.
+        if (a.cur != null && a.periods < 1) a.periods = 1
         a.cl = candleFrom(m["${key}_cl"])
         a.closedNow = false
     }
@@ -357,6 +363,7 @@ object Store {
             val c = candleFrom(x) ?: continue
             candles.add(Candle(idx++, c.t, c.o, c.h, c.l, c.c, c.v))
         }
-        return Loaded(cfg, eng, broker, candles, root["meta"].asMap(), root["savedAt"].asL())
+        val structureCandles = candleListFrom(root["structureCandles"])
+        return Loaded(cfg, eng, broker, candles, structureCandles, root["meta"].asMap(), root["savedAt"].asL())
     }
 }

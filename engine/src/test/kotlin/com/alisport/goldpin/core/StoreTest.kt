@@ -145,4 +145,20 @@ class StoreTest {
         assertEquals(4, c2.maxSetups); assertEquals(12, c2.maxZoneBoxes)
         assertEquals(Tf.H4, c2.tfS); assertEquals(Tf.M5, c2.tf2)
     }
+
+    @Test
+    fun `structure source history survives save and restore`() {
+        val mode = synth(400)
+        val structure = mode.chunked(60).mapIndexed { index, chunk ->
+            Candle(index, chunk.first().t / 3_600_000L * 3_600_000L,
+                chunk.first().o, chunk.maxOf { it.h }, chunk.minOf { it.l }, chunk.last().c,
+                chunk.sumOf { it.v })
+        }
+        val (engine, broker, cfg) = build(mode, 300)
+        val json = Store.save(cfg, engine, broker, mode.subList(0, 300), structureCandles = structure)
+        val restored = Store.load(json)
+        assertEquals(structure.size, restored.structureCandles.size)
+        assertEquals(structure.first().t, restored.structureCandles.first().t)
+        assertEquals(structure.last().c, restored.structureCandles.last().c, 1e-9)
+    }
 }

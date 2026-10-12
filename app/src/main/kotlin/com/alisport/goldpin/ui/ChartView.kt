@@ -15,6 +15,7 @@ import android.view.View
 import android.widget.OverScroller
 import com.alisport.goldpin.core.Candle
 import com.alisport.goldpin.core.Marker
+import com.alisport.goldpin.core.MarkerKind
 import com.alisport.goldpin.core.Trade
 import com.alisport.goldpin.core.ZoneBox
 import com.alisport.goldpin.core.ZoneStatus
@@ -107,6 +108,7 @@ class ChartView @JvmOverloads constructor(
 
     var showMarkers = true
     var showPinMarkers = true
+    var showTrendMarkers = true
     var showTouchMarkers = true
     var showMidMarkers = true
     var showTrigger1Markers = true
@@ -1131,7 +1133,8 @@ class ChartView @JvmOverloads constructor(
     }
 
     private fun isMarkerKindVisible(kind: Int): Boolean = when (kind) {
-        1, -1 -> showPinMarkers
+        MarkerKind.PIN_BU, MarkerKind.PIN_BE -> showPinMarkers
+        MarkerKind.TREND_UP, MarkerKind.TREND_DOWN -> showTrendMarkers
         2 -> showTouchMarkers
         3 -> showMidMarkers
         4, 5 -> showTrigger1Markers
@@ -1153,8 +1156,10 @@ class ChartView @JvmOverloads constructor(
             val y = yOf(m.price)
             if (y < -20 || y > priceH + 30) continue
             val col = when (m.kind) {
-                1 -> Palette.accent
-                -1 -> Color.parseColor("#C2417C")
+                MarkerKind.PIN_BU -> Palette.accent
+                MarkerKind.PIN_BE -> Color.parseColor("#C2417C")
+                MarkerKind.TREND_UP -> upCol
+                MarkerKind.TREND_DOWN -> dnCol
                 5 -> Palette.gold
                 7 -> upCol
                 8 -> Palette.gold
@@ -1163,10 +1168,40 @@ class ChartView @JvmOverloads constructor(
                 else -> Palette.grey
             }
             val r = Ui.dp(context, 3f).toFloat()
-            val cy = if (m.kind == 1) y - r * 3 else y + r * 3
+            if (m.kind == MarkerKind.TREND_UP || m.kind == MarkerKind.TREND_DOWN) {
+                val up = m.kind == MarkerKind.TREND_UP
+                val tipY = if (up) y - r * 2.5f else y + r * 2.5f
+                val baseY = if (up) y + r * 1.5f else y - r * 1.5f
+                pBody.color = col
+                path.reset()
+                path.moveTo(x, tipY)
+                path.lineTo(x - r * 2.2f, baseY)
+                path.lineTo(x + r * 2.2f, baseY)
+                path.close()
+                canvas.drawPath(path, pBody)
+
+                if (showMarkerText && m.text.isNotEmpty()) {
+                    val labelW = pLabelTxt.measureText(m.text) + Ui.dp(context, 12f)
+                    val labelH = Ui.dp(context, 19f).toFloat()
+                    val gap = Ui.dp(context, 5f).toFloat()
+                    val dx = Ui.dp(context, 7f).toFloat()
+                    val left = if (x + dx + labelW <= plotW - 2f) x + dx
+                        else (x - dx - labelW).coerceAtLeast(2f)
+                    val wantedTop = if (up) y - r * 2.5f - labelH - gap else y + r * 2.5f + gap
+                    val top = wantedTop.coerceIn(2f, (priceH - labelH - 2f).coerceAtLeast(2f))
+                    pLabelBg.color = (col and 0x00FFFFFF) or 0xD9000000.toInt()
+                    val rect = RectF(left, top, left + labelW, top + labelH)
+                    canvas.drawRoundRect(rect, Ui.dp(context, 4f).toFloat(), Ui.dp(context, 4f).toFloat(), pLabelBg)
+                    pLabelTxt.color = Color.WHITE
+                    canvas.drawText(m.text, left + Ui.dp(context, 6f), top + labelH * 0.68f, pLabelTxt)
+                    pLabelTxt.color = Color.WHITE
+                }
+                continue
+            }
+            val cy = if (m.kind == MarkerKind.PIN_BU) y - r * 3 else y + r * 3
             pBody.color = col
             path.reset()
-            path.moveTo(x, if (m.kind == 1) y - 2f else y + 2f)
+            path.moveTo(x, if (m.kind == MarkerKind.PIN_BU) y - 2f else y + 2f)
             path.lineTo(x - r * 2, cy)
             path.lineTo(x + r * 2, cy)
             path.close()

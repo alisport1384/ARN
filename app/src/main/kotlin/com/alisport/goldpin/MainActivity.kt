@@ -554,6 +554,7 @@ class MainActivity : Activity() {
     private fun markerToggleItems(): List<ChartToggleItem> = listOf(
         ChartToggleItem("نمایش لیبل‌ها و نشانگرها (کلید اصلی)", { s.showMarkers }, { s.showMarkers = it }),
         ChartToggleItem("نشانگر پین و ساخت ناحیه (▲/▼ پین)", { s.showPinMarkers }, { s.showPinMarkers = it }),
+        ChartToggleItem("برچسب شروع و تغییر روند (صعودی/نزولی)", { s.showTrendMarkers }, { s.showTrendMarkers = it }),
         ChartToggleItem("نشانگر برخورد اول به ناحیه (◆ برخورد)", { s.showTouchMarkers }, { s.showTouchMarkers = it }),
         ChartToggleItem("نشانگر تایید کندل میانی (● میانی)", { s.showMidMarkers }, { s.showMidMarkers = it }),
         ChartToggleItem("نشانگرهای تریگر ۱ — ولوم کم (◇/◆ ولوم کم)", { s.showTrigger1Markers }, { s.showTrigger1Markers = it }),
@@ -998,63 +999,13 @@ class MainActivity : Activity() {
         }
         scroll.addView(v)
 
-        // ── نمایش چارت ──
-        v.addView(Ui.section(this, "⓪ نمایش چارت (کنترل تک‌به‌تک اجزا)"))
+        // ── چارت ──
+        // کنترل تک‌به‌تک اجزا فقط در منوی خود چارت قرار دارد تا تب تنظیمات خلوت بماند.
+        v.addView(Ui.section(this, "⓪ چارت"))
         v.addView(switchRow("ورود خودکار به تمام‌صفحه در تب چارت", s.autoFullscreen) { b ->
             s.autoFullscreen = b; s.persistPrefs(this)
             Log.i(Log.CAT_CFG, "تمام‌صفحهٔ خودکار = $b")
         })
-        val visQuickRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        visQuickRow1.addView(Ui.btn(this, "پنجرهٔ همهٔ اجزا…", Palette.panel2, Palette.txt, 11f).apply {
-            setOnClickListener { showChartElementsDialog { showTab(4) } }
-        })
-        visQuickRow1.addView(Ui.btn(this, "روشن کردن همه", Palette.panel2, Palette.up, 11f).apply {
-            setOnClickListener {
-                allChartToggleItems().forEach { it.set(true) }
-                applyAndSaveChartVis()
-                showTab(4)
-            }
-        })
-        visQuickRow1.addView(Ui.btn(this, "خاموش کردن همه", Palette.panel2, Palette.down, 11f).apply {
-            setOnClickListener {
-                allChartToggleItems().forEach { it.set(false) }
-                applyAndSaveChartVis()
-                showTab(4)
-            }
-        })
-        v.addView(visQuickRow1)
-
-        val visQuickRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        visQuickRow2.addView(Ui.btn(this, "باکس‌ها…", Palette.panel2, Palette.gold, 11f).apply {
-            setOnClickListener { showBoxesVisibilityDialog { showTab(4) } }
-        })
-        visQuickRow2.addView(Ui.btn(this, "لیبل‌ها…", Palette.panel2, Palette.gold, 11f).apply {
-            setOnClickListener { showMarkersVisibilityDialog { showTab(4) } }
-        })
-        visQuickRow2.addView(Ui.btn(this, "خطوط…", Palette.panel2, Palette.gold, 11f).apply {
-            setOnClickListener { showLinesVisibilityDialog { showTab(4) } }
-        })
-        visQuickRow2.addView(Ui.btn(this, "اجزای پایه…", Palette.panel2, Palette.gold, 11f).apply {
-            setOnClickListener { showBaseVisibilityDialog { showTab(4) } }
-        })
-        v.addView(visQuickRow2)
-
-        fun addSettingsToggleSubgroup(subTitle: String, items: List<ChartToggleItem>) {
-            v.addView(Ui.tv(this, subTitle, 11.5f, Palette.gold, true).apply {
-                setPadding(0, Ui.dp(this@MainActivity, 8f), 0, Ui.dp(this@MainActivity, 2f))
-            })
-            for (item in items) {
-                v.addView(switchRow(item.title, item.get()) { b ->
-                    item.set(b)
-                    applyAndSaveChartVis()
-                })
-            }
-        }
-        addSettingsToggleSubgroup("▫ باکس‌ها (به تفکیک نوع و وضعیت):", boxToggleItems())
-        addSettingsToggleSubgroup("▫ لیبل‌ها و نشانگرها (به تفکیک نوع):", markerToggleItems())
-        addSettingsToggleSubgroup("▫ خطوط ستاپ و سطوح معامله (به تفکیک نوع):", lineToggleItems())
-        addSettingsToggleSubgroup("▫ حجم و اجزای پایهٔ چارت:", baseToggleItems())
-
         v.addView(Ui.tv(this, "ژست‌های چارت: دو انگشت = زوم همزمان زمان و قیمت · یک انگشت = جابه‌جایی · " +
             "کشیدن روی محور قیمت = فشرده/باز کردن مقیاس · دو ضربه = بازنشانی نما · دو ضربه روی محور قیمت = مقیاس خودکار · " +
             "نگه‌داشتن = کراس‌هیر و منوی چارت", 10.5f, Palette.dim))

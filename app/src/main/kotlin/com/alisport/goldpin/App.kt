@@ -44,6 +44,10 @@ class AppState {
     /** کش کندل‌های دانلودشدهٔ فید به تفکیک تایم‌فریم (ثانیه) در حافظه */
     private val tfFeedCache = java.util.concurrent.ConcurrentHashMap<Int, List<Candle>>()
 
+    /** تاریخچهٔ قدیمی تایم‌فریم ساختار؛ برای پیش‌بارگذاری توالی‌ها، بدون ساخت باکس بی‌دیتای تریگر۲. */
+    @Volatile
+    private var structureCandles: List<Candle> = emptyList()
+
     /** آیا دادهٔ مود فعلی از فید آنلاین دانلود شده است؟ */
     @Volatile
     private var modeFromFeed: Boolean = false
@@ -95,6 +99,7 @@ class AppState {
 
     var showMarkers: Boolean = true
     var showPinMarkers: Boolean = true
+    var showTrendMarkers: Boolean = true
     var showTouchMarkers: Boolean = true
     var showMidMarkers: Boolean = true
     var showTrigger1Markers: Boolean = true
@@ -216,7 +221,7 @@ class AppState {
     /** راه‌اندازی لاگر و هشدارها + وصل کردن آن‌ها به موتور و کارگزار */
     fun initApp(ctx: Context) {
         appCtx = ctx.applicationContext
-        Log.init(appCtx!!, "1.4.13")
+        Log.init(appCtx!!, "1.4.14")
         Alerts.init(appCtx!!)
         val p = appCtx!!.getSharedPreferences("goldpin", Context.MODE_PRIVATE)
         // مهاجرت ۱٫۱ → ۱٫۲: تمام‌صفحهٔ خودکار دیگر پیش‌فرض نیست؛ تنظیم قدیمی true را یک‌بار خاموش کن.
@@ -236,6 +241,7 @@ class AppState {
         showBoxLabels = p.getBoolean("cv_show_box_labels", true)
         showMarkers = p.getBoolean("cv_show_markers", true)
         showPinMarkers = p.getBoolean("cv_show_pin_markers", true)
+        showTrendMarkers = p.getBoolean("cv_show_trend_markers", true)
         showTouchMarkers = p.getBoolean("cv_show_touch_markers", true)
         showMidMarkers = p.getBoolean("cv_show_mid_markers", true)
         showTrigger1Markers = p.getBoolean("cv_show_t1_markers", true)
@@ -281,6 +287,7 @@ class AppState {
             .putBoolean("cv_show_box_labels", showBoxLabels)
             .putBoolean("cv_show_markers", showMarkers)
             .putBoolean("cv_show_pin_markers", showPinMarkers)
+            .putBoolean("cv_show_trend_markers", showTrendMarkers)
             .putBoolean("cv_show_touch_markers", showTouchMarkers)
             .putBoolean("cv_show_mid_markers", showMidMarkers)
             .putBoolean("cv_show_t1_markers", showTrigger1Markers)
@@ -319,6 +326,7 @@ class AppState {
         cv.showBoxLabels = showBoxLabels
         cv.showMarkers = showMarkers
         cv.showPinMarkers = showPinMarkers
+        cv.showTrendMarkers = showTrendMarkers
         cv.showTouchMarkers = showTouchMarkers
         cv.showMidMarkers = showMidMarkers
         cv.showTrigger1Markers = showTrigger1Markers
@@ -420,7 +428,20 @@ class AppState {
         val prev = Alerts.inBacktest
         Alerts.inBacktest = true
         try {
-            if (execCandles.isNotEmpty()) engine.feed(execCandles, lastIsClosed = backtestFull)
+            if (execCandles.isNotEmpty()) {
+                val structureHistory = availableStructureHistory(cfg.tfS)
+                val seeded = engine.seedStructureHistory(structureHistory, execCandles.first().t)
+                if (seeded > 0) {
+                    Log.i(Log.CAT_ENGINE, "توالی‌های تاریخی ساختار پیش‌بارگذاری شد",
+                        "کندل ساختار=${Fa.d(seeded.toString())} شروع=${Tf.label(cfg.tfS)} ${structureHistory.firstOrNull()?.t ?: 0L}")
+                }
+                engine.feed(execCandles, lastIsClosed = backtestFull)
+                val latestClosedIndex = engine.processed - 1
+                val latestClosed = execCandles.getOrNull(latestClosedIndex)
+                if (latestClosed != null) {
+                    engine.ensureCurrentTrendMarker(latestClosed.t, latestClosed.c, latestClosedIndex)
+                }
+            }
         } finally {
             // ⚠ بدون finally، هر استثنا داخل feed این پرچم را برای همیشه true می‌گذاشت
             // و از آن لحظه به بعد هیچ بنر/نوتیفیکیشن/صدایی پخش نمی‌شد.
@@ -454,6 +475,78 @@ class AppState {
         val srcStep = medianStepSec(src)
         val agg = if (sameTimeframe(srcStep, targetTfSec.toLong())) src else Feed.aggregate(src, targetTfSec)
         return if (useSyntheticVolume) Feed.synthesizeVolumeIfMissing(agg) else agg
+    }
+
+    /**
+     * گردآوری قدیمی‌ترین تاریخچهٔ قابل‌استفاده برای تایم‌فریم ساختار از همهٔ منابع
+     * ریزتر/هم‌دانه: سری ساختار ذخیره‌شده، کش‌های فید، دادهٔ ریز داخلی/CSV و مود.
+     * در هر باکت، منبع ریزتر اولویت دارد؛ پس از آغاز تاریخچهٔ تریگر۲، موتور اصلی
+     * پروفایل دقیق را از همان کندل‌های تریگر۲ می‌سازد.
+     */
+    private fun availableStructureHistory(targetTfSec: Int): List<Candle> {
+        if (targetTfSec <= 0) return emptyList()
+        data class SourceBar(val candle: Candle, val step: Long, val priority: Int)
+        val byTime = java.util.TreeMap<Long, SourceBar>()
+        val sources = ArrayList<Pair<List<Candle>, Int>>()
+        sources.add(structureCandles to 0)
+        tfFeedCache.entries.sortedBy { it.key }.forEachIndexed { index, entry ->
+            sources.add(entry.value to (10 + index))
+        }
+        sources.add(fineCandles to 100)
+        sources.add(modeCandles to 200)
+
+        for ((source, priority) in sources) {
+            if (source.isEmpty()) continue
+            val step = medianStepSec(source)
+            if (step <= 0L || step > targetTfSec.toLong()) continue
+            for (bar in Feed.aggregate(source, targetTfSec)) {
+                val bucket = Tf.bucket(targetTfSec, bar.t)
+                val old = byTime[bucket]
+                if (old == null || step < old.step || (step == old.step && priority >= old.priority)) {
+                    byTime[bucket] = SourceBar(
+                        Candle(bar.bi, bucket, bar.o, bar.h, bar.l, bar.c, bar.v), step, priority
+                    )
+                }
+            }
+        }
+        return byTime.values.mapIndexed { index, source ->
+            val c = source.candle
+            Candle(index, c.t, c.o, c.h, c.l, c.c, c.v)
+        }
+    }
+
+    /** ادغام دو سری هم‌تایم‌فریم با ترجیح دادهٔ جدیدتر و حفظ بازهٔ قدیمی‌تر. */
+    private fun mergeAtTimeframe(
+        preferred: List<Candle>,
+        fallback: List<Candle>,
+        targetTfSec: Int
+    ): List<Candle> {
+        if (targetTfSec <= 0) return emptyList()
+        val byTime = java.util.TreeMap<Long, Candle>()
+        fun add(source: List<Candle>) {
+            if (source.isEmpty()) return
+            val step = medianStepSec(source)
+            if (step <= 0L || step > targetTfSec.toLong()) return
+            for (bar in Feed.aggregate(source, targetTfSec)) {
+                val bucket = Tf.bucket(targetTfSec, bar.t)
+                byTime[bucket] = Candle(bar.bi, bucket, bar.o, bar.h, bar.l, bar.c, bar.v)
+            }
+        }
+        add(fallback)
+        add(preferred)
+        return byTime.values.mapIndexed { index, c ->
+            Candle(index, c.t, c.o, c.h, c.l, c.c, c.v)
+        }
+    }
+
+    /** ثبت سری تاریخی ساختار مستقل از سری اجرای تریگر۲. */
+    private fun rememberStructureHistory(source: List<Candle>, targetTfSec: Int) {
+        if (source.isEmpty() || targetTfSec <= 0) return
+        val merged = mergeAtTimeframe(source, structureCandles, targetTfSec)
+        if (merged.isNotEmpty()) {
+            structureCandles = merged
+            tfFeedCache[targetTfSec] = mergeAtTimeframe(merged, tfFeedCache[targetTfSec].orEmpty(), targetTfSec)
+        }
     }
 
     private fun mergeDisplayWithMode(chart: List<Candle>, targetTfSec: Int): List<Candle> {
@@ -520,7 +613,9 @@ class AppState {
                 notifyUi()
             }
         }
-        if (!m.custom && modeFromFeed && tfFeedCache[cfg.tf2] == null) {
+        // با تغییر مود، تاریخچهٔ تایم‌فریم ساختار هم باید از منبع مناسب آن مود گرفته شود؛
+        // سری نمایش چارت به‌تنهایی موتور را بازسازی نمی‌کند.
+        if (!m.custom && modeFromFeed) {
             downloadHistory()
         }
     }
@@ -581,6 +676,7 @@ class AppState {
         val t0 = System.currentTimeMillis()
         val targetTf = chartTfSec
         val modeTf = cfg.tf2
+        val structureTf = cfg.tfS
         busy = true
         busyText = "در حال دانلود تاریخچهٔ طلا (${com.alisport.goldpin.core.Tf.label(targetTf)})…"
         lastFeedError = null
@@ -591,18 +687,36 @@ class AppState {
                 val needModeDownload = (targetTf == modeTf || !modeFromFeed || modeCandles.isEmpty() || !sameTimeframe(medianStepSec(modeCandles), modeTf.toLong()))
                 val (modeChart, modeBase) = if (needModeDownload) fetchChartHistoryBlocking(modeTf) else (modeCandles to baseTfSec)
                 val (chart, base) = if (targetTf == modeTf) (modeChart to modeBase) else fetchChartHistoryBlocking(targetTf)
+                val modeSeries = mergeAtTimeframe(modeChart, fineCandles, modeTf)
+                val structureSource = when {
+                    structureTf == modeTf -> modeSeries
+                    structureTf == targetTf -> chart
+                    else -> try {
+                        fetchChartHistoryBlocking(structureTf).first
+                    } catch (e: Exception) {
+                        Log.w(Log.CAT_FEED, "دریافت تاریخچهٔ مستقل ساختار ناموفق بود؛ از منابع محلی استفاده می‌شود",
+                            e.message ?: "")
+                        emptyList()
+                    }
+                }
                 val n = chart.size
                 Log.i(Log.CAT_FEED, "دانلود تاریخچه موفق",
-                    "کندل=$n مدت=${System.currentTimeMillis() - t0}ms پایه=${com.alisport.goldpin.core.Tf.label(base)} چارت=${com.alisport.goldpin.core.Tf.label(targetTf)}")
+                    "کندل=$n مدت=${System.currentTimeMillis() - t0}ms پایه=${com.alisport.goldpin.core.Tf.label(base)} " +
+                        "چارت=${com.alisport.goldpin.core.Tf.label(targetTf)} ساختار=${com.alisport.goldpin.core.Tf.label(structureTf)} " +
+                        "توالی‌ساختار=${structureSource.size}")
                 io.execute {
                     try {
                         baseTfSec = base
                         modeFromFeed = true
-                        if (modeChart.isNotEmpty()) tfFeedCache[modeTf] = modeChart
+                        if (modeSeries.isNotEmpty()) tfFeedCache[modeTf] = modeSeries
                         if (chart.isNotEmpty()) tfFeedCache[targetTf] = chart
-                        if (needModeDownload) {
-                            busyText = "در حال محاسبهٔ موتور روی ${com.alisport.goldpin.util.Fa.d(modeChart.size.toString())} کندل…"
-                            setCandles(modeChart, rebuildNow = true)
+                        if (structureSource.isNotEmpty()) rememberStructureHistory(structureSource, structureTf)
+                        if (needModeDownload && modeSeries.isNotEmpty()) {
+                            busyText = "در حال محاسبهٔ موتور روی ${com.alisport.goldpin.util.Fa.d(modeSeries.size.toString())} کندل…"
+                            setCandles(modeSeries, rebuildNow = false)
+                        }
+                        if (needModeDownload || structureSource.isNotEmpty()) {
+                            rebuild(clearOrders = needModeDownload)
                         }
                         if (targetTf != modeTf) {
                             setDisplayCandles(mergeDisplayWithMode(chart, targetTf))
@@ -897,7 +1011,9 @@ class AppState {
         // ⚠ موتور/کارگزار در نخ IO تغییر می‌کنند؛ بدون قفل، Store.save روی فهرست‌های در حال
         // تغییر می‌افتاد و ConcurrentModificationException می‌داد (ذخیرهٔ خودکار حین لایو).
         val persistedCandles = if (modeCandles.isNotEmpty()) modeCandles else candles
-        return synchronized(stateLock) { Store.save(cfg, engine, broker, persistedCandles, meta) }
+        return synchronized(stateLock) {
+            Store.save(cfg, engine, broker, persistedCandles, meta, structureCandles = structureCandles)
+        }
     }
 
     fun saveToAutoFile(ctx: Context): String {
@@ -967,6 +1083,12 @@ class AppState {
                     fineCandles = restoredMode
                 }
                 modeCandles = restoredMode
+                structureCandles = ArrayList(ld.structureCandles)
+                val latestClosedIndex = engine.processed - 1
+                val latestClosed = restoredMode.getOrNull(latestClosedIndex)
+                if (latestClosed != null) {
+                    engine.ensureCurrentTrendMarker(latestClosed.t, latestClosed.c, latestClosedIndex)
+                }
                 candles = if (chartTfSec == cfg.tf2 || sameTimeframe(step, chartTfSec.toLong()) || restoredMode.isEmpty()) {
                     restoredMode
                 } else {
@@ -1073,6 +1195,7 @@ class AppState {
         synchronized(stateLock) {
             candles = emptyList()
             modeCandles = emptyList()
+            structureCandles = emptyList()
             tfFeedCache.clear()
             modeFromFeed = false
             broker.reset()
