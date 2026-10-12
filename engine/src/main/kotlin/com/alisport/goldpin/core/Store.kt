@@ -122,6 +122,11 @@ object Store {
         o["cnt"] = listOf(e.cnt.setup, e.cnt.touch, e.cnt.mid, e.cnt.lv, e.cnt.hv, e.cnt.entry, e.cnt.done, e.cnt.zoneCount, e.cnt.zoneRejected)
         o["trend"] = e.trend
         o["HH"] = e.HH; o["HL"] = e.HL; o["LL"] = e.LL; o["LH"] = e.LH
+        o["tempBoxTop"] = e.tempBoxTop; o["tempBoxBot"] = e.tempBoxBot
+        o["hlPinLo"] = e.hlPinLo; o["hlPinRef"] = e.hlPinRef; o["hlPinHi"] = e.hlPinHi; o["hlPinSeq"] = e.hlPinSeq
+        o["hhPinHi"] = e.hhPinHi; o["hhPinRef"] = e.hhPinRef; o["hhPinLo"] = e.hhPinLo; o["hhPinSeq"] = e.hhPinSeq
+        o["lhPinHi"] = e.lhPinHi; o["lhPinRef"] = e.lhPinRef; o["lhPinLo"] = e.lhPinLo; o["lhPinSeq"] = e.lhPinSeq
+        o["llPinLo"] = e.llPinLo; o["llPinRef"] = e.llPinRef; o["llPinHi"] = e.llPinHi; o["llPinSeq"] = e.llPinSeq
         o["seqStart"] = e.seqStart
         o["bullBU1Low"] = e.bullBU1Low; o["bullBEHigh"] = e.bullBEHigh
         o["bullBU2Low"] = e.bullBU2Low; o["bullBU2Bi"] = e.bullBU2Bi
@@ -172,6 +177,15 @@ object Store {
         }
         e.trend = m["trend"].asI()
         e.HH = m["HH"].asD(); e.HL = m["HL"].asD(); e.LL = m["LL"].asD(); e.LH = m["LH"].asD()
+        e.tempBoxTop = m["tempBoxTop"].asD(); e.tempBoxBot = m["tempBoxBot"].asD()
+        e.hlPinLo = m["hlPinLo"].asD(); e.hlPinRef = m["hlPinRef"].asD(); e.hlPinHi = m["hlPinHi"].asD()
+        e.hlPinSeq = if (m.containsKey("hlPinSeq")) m["hlPinSeq"].asI() else -1
+        e.hhPinHi = m["hhPinHi"].asD(); e.hhPinRef = m["hhPinRef"].asD(); e.hhPinLo = m["hhPinLo"].asD()
+        e.hhPinSeq = if (m.containsKey("hhPinSeq")) m["hhPinSeq"].asI() else -1
+        e.lhPinHi = m["lhPinHi"].asD(); e.lhPinRef = m["lhPinRef"].asD(); e.lhPinLo = m["lhPinLo"].asD()
+        e.lhPinSeq = if (m.containsKey("lhPinSeq")) m["lhPinSeq"].asI() else -1
+        e.llPinLo = m["llPinLo"].asD(); e.llPinRef = m["llPinRef"].asD(); e.llPinHi = m["llPinHi"].asD()
+        e.llPinSeq = if (m.containsKey("llPinSeq")) m["llPinSeq"].asI() else -1
         e.seqStart = m["seqStart"].asI()
         e.bullBU1Low = m["bullBU1Low"].asD(); e.bullBEHigh = m["bullBEHigh"].asD()
         e.bullBU2Low = m["bullBU2Low"].asD(); e.bullBU2Bi = m["bullBU2Bi"].asI()

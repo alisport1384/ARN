@@ -81,11 +81,11 @@ class PaperBroker(private val cfg: Settings) {
         return max(q, 0.0)
     }
 
-    /** ثبت سفارش لیمیت — چند سفارش تا سقف maxSetups مجازند. */
+    /** ثبت سفارش لیمیت — مطابق §4-8 و §10 سند نهایی، حداکثر ۱ سفارش لیمیت در انتظار یا ۱ معامله باز در هر لحظه مجاز است. */
     fun registerLimit(s: Setup, bar: Candle): Boolean {
         val activeCount = pendings.size + opens.count { it.open }
-        if (activeCount >= cfg.maxSetups) {
-            lastError = "تعداد سفارش/پوزیشن فعال به سقف maxSetups=${cfg.maxSetups} رسید"
+        if (activeCount >= 1) {
+            lastError = "فقط ۱ سفارش یا پوزیشن هم‌زمان در چارت مجاز است"
             return false
         }
         // هم‌پوشانی روی یک ستاپ: اگر همین setupId در حال حاضر سفارش معلق دارد، رد شود.

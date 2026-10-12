@@ -17,9 +17,8 @@
 //  محدودیت باقی‌مانده: لایهٔ strategy.entry این فایل هنوز فقط یک سفارش فعال با
 //  شناسه‌های ثابت L/S دارد؛ چندسفارشیِ تا سقف maxSetups در Kotlin پیاده شده است.
 // ═══════════════════════════════════════════════════════════════════════════════
-// §defaults: سرمایهٔ اولیه ۱۰۰٬۰۰۰؛ کارمزد ۰٫۰۴٪ و لغزش ۱ تیک.
-// توجه: pyramiding=6 سقف موتور TV است، اما شناسه‌های ثابت L/S هنوز چند سفارش مستقل نمی‌سازند.
-strategy("Pin/Ready + FRVP  [Backtest]", "PinReady·STR", true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, initial_capital = 100000, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, pyramiding = 6, process_orders_on_close = false, close_entries_rule = strategy.close_entries_rule.all)
+// §defaults: سرمایهٔ اولیه ۱۰۰٬۰۰۰؛ کارمزد ۰٫۰۴٪ و لغزش ۱ تیک؛ فقط ۱ سفارش/پوزیشن هم‌زمان مجاز است (§4-8 و §10).
+strategy("Pin/Ready + FRVP  [Backtest]", "PinReady·STR", true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, initial_capital = 100000, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, pyramiding = 1, process_orders_on_close = false, close_entries_rule = strategy.close_entries_rule.all)
 
 // ───────────────────────────────────────────────────────────────────────────────
 //  ① INPUTS
@@ -220,7 +219,7 @@ f_pickHigh(Candle a, Candle b) =>
     float impH = na
     float impL = na
     int   impBi = na
-    if a.h > b.h or (a.h == b.h and a.l > b.l)
+    if a.h > b.h or (a.h == b.h and a.l < b.l)
         impH := a.h
         impL := a.l
         impBi := a.bi
@@ -293,6 +292,24 @@ var float HH = na
 var float HL = na
 var float LL = na
 var float LH = na
+var float tempBoxTop = na
+var float tempBoxBot = na
+var float hlPinLo = na
+var float hlPinRef = na
+var float hlPinHi = na
+var int   hlPinSeq = -1
+var float hhPinHi = na
+var float hhPinRef = na
+var float hhPinLo = na
+var int   hhPinSeq = -1
+var float lhPinHi = na
+var float lhPinRef = na
+var float lhPinLo = na
+var int   lhPinSeq = -1
+var float llPinLo = na
+var float llPinRef = na
+var float llPinHi = na
+var int   llPinSeq = -1
 var int lastHHbi = na
 var int lastHLbi = na
 
@@ -719,13 +736,11 @@ if aggS.closedNow
         Candle b = array.get(structBars, nS - 1)
         if f_lowPair(a, b)
             [impH, impL, impBi] = f_pickLow(a, b)
-            bool impAlo = impBi == a.bi
-            float refLo = impAlo ? math.min(a.c, a.o) : math.min(b.c, b.o)
+            float refLo = math.min(a.c, b.o)
             array.push(pins, Pin.new(1, impH, impL, impBi, b.bi, refLo, 0))
         if f_highPair(a, b)
             [impH2, impL2, impBi2] = f_pickHigh(a, b)
-            bool impAhi = impBi2 == a.bi
-            float refHi = impAhi ? math.max(a.c, a.o) : math.max(b.c, b.o)
+            float refHi = math.max(a.c, b.o)
             array.push(pins, Pin.new(-1, impH2, impL2, impBi2, b.bi, refHi, 0))
 
     // ── چرخهٔ عمر کاندیدها : ابطال / Ready ──
@@ -743,12 +758,15 @@ if aggS.closedNow
 
     // ── Ready با تناوب سخت BU↔BE ──
     // expectedReady: 0=آزاد، 1=نوبت BU، -1=نوبت BE
+    bool readyBuNow = false
+    bool readyBeNow = false
     if array.size(pins) > 0
         if expectedReady == 0 or expectedReady == 1
             int iBU = f_bestReady(pins, 1)
             if iBU >= 0
                 Pin pBU = array.get(pins, iBU)
                 if not f_hasBetterActive(pins, 1, pBU.lo)
+                    readyBuNow := true
                     evRdyBU := true
                     lastBUpin := pBU.lo
                     lastBUpinRef := pBU.ref
@@ -760,11 +778,26 @@ if aggS.closedNow
                     label.new(pBU.bi, pBU.lo, "کندل مهم پایین‌ترین\nReady BU · pinBU", xloc.bar_index, yloc.price, color.new(color.blue, 10), label.style_label_up, color.white, size.small)
                     expectedReady := -1
                     array.clear(pins)
+                    if trend == 0 and beActive and not na(lastBEpin)
+                        tempBoxTop := lastBEpin
+                        tempBoxBot := lastBUpin
+                    else if trend == -1 and not na(lastBEpin)
+                        LL := lastBUpin
+                        LH := lastBEpin
+                        lhPinHi := lastBEpin
+                        lhPinRef := lastBEpinRef
+                        lhPinLo := lastBEpinLo
+                        lhPinSeq := beSeq
+                        llPinLo := lastBUpin
+                        llPinRef := lastBUpinRef
+                        llPinHi := lastBUpinHi
+                        llPinSeq := buSeq
         if (expectedReady == 0 or expectedReady == -1) and array.size(pins) > 0
             int iBE = f_bestReady(pins, -1)
             if iBE >= 0
                 Pin pBE = array.get(pins, iBE)
                 if not f_hasBetterActive(pins, -1, pBE.hi)
+                    readyBeNow := true
                     evRdyBE := true
                     lastBEpin := pBE.hi
                     lastBEpinRef := pBE.ref
@@ -776,92 +809,229 @@ if aggS.closedNow
                     label.new(pBE.bi, pBE.hi, "کندل مهم بالاترین\nReady BE · pinBE", xloc.bar_index, yloc.price, color.new(color.maroon, 10), label.style_label_down, color.white, size.small)
                     expectedReady := 1
                     array.clear(pins)
+                    if trend == 0 and buActive and not na(lastBUpin)
+                        tempBoxTop := lastBEpin
+                        tempBoxBot := lastBUpin
+                    else if trend == 1 and not na(lastBUpin)
+                        HH := lastBEpin
+                        HL := lastBUpin
+                        hlPinLo := lastBUpin
+                        hlPinRef := lastBUpinRef
+                        hlPinHi := lastBUpinHi
+                        hlPinSeq := buSeq
+                        hhPinHi := lastBEpin
+                        hhPinRef := lastBEpinRef
+                        hhPinLo := lastBEpinLo
+                        hhPinSeq := beSeq
 
-    // ── ابطال پین بعد از Ready: باز/کلوز اکید؛ سایه و برابری بی‌اثر ──
-    if buActive and not na(lastBUpinRef) and sb.bi > 0
-        bool crossedRefBU = sb.o < lastBUpinRef or sb.c < lastBUpinRef
-        bool crossedLowBU = not na(lastBUpin) and (sb.o < lastBUpin or sb.c < lastBUpin)
-        bool isRotationBU = beSeq > buSeq
-        if (crossedRefBU or crossedLowBU) and not isRotationBU
-            float oldBUInvalid = lastBUpin
+    // ── تعیین / ادامه / تغییر روند و ابطال پین‌ها (§4-1 سند نهایی) ──
+    if trend == 0
+        if not na(tempBoxTop) and not na(tempBoxBot)
+            if sb.c > tempBoxTop
+                trend := 1
+                highestBE := tempBoxTop
+                lowestBUpin := tempBoxBot
+                tempBoxTop := na
+                tempBoxBot := na
+                HH := na
+                HL := na
+                beActive := false
+                buActive := true
+                if buSeq < beSeq
+                    pinSeq += 1
+                    buSeq := pinSeq
+                expectedReady := -1
+                evTrendUp := true
+            else if sb.c < tempBoxBot
+                trend := -1
+                highestBE := tempBoxTop
+                lowestBUpin := tempBoxBot
+                tempBoxTop := na
+                tempBoxBot := na
+                LL := na
+                LH := na
+                buActive := false
+                beActive := true
+                if beSeq < buSeq
+                    pinSeq += 1
+                    beSeq := pinSeq
+                expectedReady := 1
+                evTrendDn := true
+        if trend == 0 and sb.bi > 0
+            if not readyBuNow and buActive and not na(lastBUpinRef) and beSeq <= buSeq
+                bool crossedRefBU = sb.o < lastBUpinRef or sb.c < lastBUpinRef
+                bool crossedLowBU = not na(lastBUpin) and (sb.o < lastBUpin or sb.c < lastBUpin)
+                if crossedRefBU or crossedLowBU
+                    float oldBUInvalid = lastBUpin
+                    buActive := false
+                    lastBUpin := na
+                    lastBUpinRef := na
+                    lastBUpinHi := na
+                    tempBoxTop := na
+                    tempBoxBot := na
+                    expectedReady := beActive ? 1 : 0
+                    label.new(sb.bi, oldBUInvalid, "pinBU بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_up, color.white, size.tiny)
+            if not readyBeNow and beActive and not na(lastBEpinRef) and buSeq <= beSeq
+                bool crossedRefBE = sb.o > lastBEpinRef or sb.c > lastBEpinRef
+                bool crossedHighBE = not na(lastBEpin) and (sb.o > lastBEpin or sb.c > lastBEpin)
+                if crossedRefBE or crossedHighBE
+                    float oldBEInvalid = lastBEpin
+                    beActive := false
+                    lastBEpin := na
+                    lastBEpinRef := na
+                    lastBEpinLo := na
+                    tempBoxTop := na
+                    tempBoxBot := na
+                    expectedReady := buActive ? -1 : 0
+                    label.new(sb.bi, oldBEInvalid, "pinBE بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_down, color.white, size.tiny)
+    else if trend == 1
+        if not na(HL) and sb.c < HL
+            float oldHL = HL
+            float oldHH = HH
+            trend := -1
+            evChgDn := true
+            highestBE := oldHH
+            lowestBUpin := oldHL
+            HH := na
+            HL := na
+            LL := na
+            LH := na
             buActive := false
             lastBUpin := na
             lastBUpinRef := na
             lastBUpinHi := na
-            if trend == 1
-                HL := na
-            label.new(sb.bi, oldBUInvalid, "pinBU بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_up, color.white, size.tiny)
-    if beActive and not na(lastBEpinRef) and sb.bi > 0
-        bool crossedRefBE = sb.o > lastBEpinRef or sb.c > lastBEpinRef
-        bool crossedHighBE = not na(lastBEpin) and (sb.o > lastBEpin or sb.c > lastBEpin)
-        bool isRotationBE = buSeq > beSeq
-        if (crossedRefBE or crossedHighBE) and not isRotationBE
-            float oldBEInvalid = lastBEpin
+            if not na(hhPinHi)
+                lastBEpin := hhPinHi
+                lastBEpinRef := hhPinRef
+                lastBEpinLo := hhPinLo
+                beActive := true
+                pinSeq += 1
+                beSeq := pinSeq
+            expectedReady := 1
+        else
+            if not na(HH) and sb.c > HH
+                if buSeq < beSeq
+                    beActive := false
+                    lastBEpin := na
+                    lastBEpinRef := na
+                    lastBEpinLo := na
+                    HH := na
+                    HL := na
+                    if not na(hlPinLo)
+                        lastBUpin := hlPinLo
+                        lastBUpinRef := hlPinRef
+                        lastBUpinHi := hlPinHi
+                        buActive := true
+                        buSeq := hlPinSeq
+                    expectedReady := -1
+                else
+                    HH := na
+                    HL := na
+                    expectedReady := -1
+            if not readyBeNow and beActive and not na(lastBEpinRef) and buSeq <= beSeq and sb.bi > 0
+                bool crossedRefBE = sb.o > lastBEpinRef or sb.c > lastBEpinRef
+                bool crossedHighBE = not na(lastBEpin) and (sb.o > lastBEpin or sb.c > lastBEpin)
+                if crossedRefBE or crossedHighBE
+                    float oldBEInvalid = lastBEpin
+                    beActive := false
+                    lastBEpin := na
+                    lastBEpinRef := na
+                    lastBEpinLo := na
+                    HH := na
+                    HL := na
+                    if not na(hlPinLo)
+                        lastBUpin := hlPinLo
+                        lastBUpinRef := hlPinRef
+                        lastBUpinHi := hlPinHi
+                        buActive := true
+                        buSeq := hlPinSeq
+                    expectedReady := buActive ? -1 : 0
+                    label.new(sb.bi, oldBEInvalid, "pinBE بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_down, color.white, size.tiny)
+            if not readyBuNow and buActive and not na(lastBUpinRef) and beSeq <= buSeq and sb.bi > 0
+                bool crossedRefBU = sb.o < lastBUpinRef or sb.c < lastBUpinRef
+                bool crossedLowBU = not na(lastBUpin) and (sb.o < lastBUpin or sb.c < lastBUpin)
+                if crossedRefBU or crossedLowBU
+                    float oldBUInvalid = lastBUpin
+                    buActive := false
+                    lastBUpin := na
+                    lastBUpinRef := na
+                    lastBUpinHi := na
+                    expectedReady := beActive ? 1 : 0
+                    label.new(sb.bi, oldBUInvalid, "pinBU بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_up, color.white, size.tiny)
+    else if trend == -1
+        if not na(LH) and sb.c > LH
+            float oldLH = LH
+            float oldLL = LL
+            trend := 1
+            evChgUp := true
+            highestBE := oldLH
+            lowestBUpin := oldLL
+            HH := na
+            HL := na
+            LL := na
+            LH := na
             beActive := false
             lastBEpin := na
             lastBEpinRef := na
             lastBEpinLo := na
-            if trend == -1
-                LH := na
-            label.new(sb.bi, oldBEInvalid, "pinBE بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_down, color.white, size.tiny)
-
-    // ── روند فقط با توالی پین‌ها و کلوز کندل ساختار ──
-    if trend == 0
-        if not na(lastBUpin) and not na(lastBEpin)
-            if sb.c > lastBEpin
-                trend := 1
-                HH := lastBEpin
-                HL := lastBUpin
-                highestBE := lastBEpin
-                lowestBUpin := lastBUpin
-                evTrendUp := true
-            else if sb.c < lastBUpin
-                trend := -1
-                LL := lastBUpin
-                LH := lastBEpin
-                lowestBUpin := lastBUpin
-                highestBE := lastBEpin
-                evTrendDn := true
-    else if trend == 1
-        if sb.c > HH
-            HH := sb.c
-        else if not na(lastBUpin) and sb.c < lastBUpin
-            if beSeq > buSeq
-                trend := -1
-                LL := lastBUpin
-                LH := HH
-                highestBE := HH
-                lowestBUpin := lastBUpin
-                buActive := false
-                evChgDn := true
-            else if buActive
-                float oldBUBreak = lastBUpin
-                buActive := false
-                lastBUpin := na
-                lastBUpinRef := na
-                lastBUpinHi := na
-                HL := na
-                label.new(sb.bi, oldBUBreak, "pinBU حذف شد · توالی چرخش نبود", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_up, color.white, size.tiny)
-    else if trend == -1
-        if sb.c < LL
-            LL := sb.c
-        else if not na(lastBEpin) and sb.c > lastBEpin
-            if buSeq > beSeq
-                trend := 1
-                HH := lastBEpin
-                HL := LL
-                highestBE := lastBEpin
-                lowestBUpin := LL
-                beActive := false
-                evChgUp := true
-            else if beActive
-                float oldBEBreak = lastBEpin
-                beActive := false
-                lastBEpin := na
-                lastBEpinRef := na
-                lastBEpinLo := na
-                LH := na
-                label.new(sb.bi, oldBEBreak, "pinBE حذف شد · توالی چرخش نبود", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_down, color.white, size.tiny)
+            if not na(llPinLo)
+                lastBUpin := llPinLo
+                lastBUpinRef := llPinRef
+                lastBUpinHi := llPinHi
+                buActive := true
+                pinSeq += 1
+                buSeq := pinSeq
+            expectedReady := -1
+        else
+            if not na(LL) and sb.c < LL
+                if beSeq < buSeq
+                    buActive := false
+                    lastBUpin := na
+                    lastBUpinRef := na
+                    lastBUpinHi := na
+                    LL := na
+                    LH := na
+                    if not na(lhPinHi)
+                        lastBEpin := lhPinHi
+                        lastBEpinRef := lhPinRef
+                        lastBEpinLo := lhPinLo
+                        beActive := true
+                        beSeq := lhPinSeq
+                    expectedReady := 1
+                else
+                    LL := na
+                    LH := na
+                    expectedReady := 1
+            if not readyBuNow and buActive and not na(lastBUpinRef) and beSeq <= buSeq and sb.bi > 0
+                bool crossedRefBU = sb.o < lastBUpinRef or sb.c < lastBUpinRef
+                bool crossedLowBU = not na(lastBUpin) and (sb.o < lastBUpin or sb.c < lastBUpin)
+                if crossedRefBU or crossedLowBU
+                    float oldBUInvalid = lastBUpin
+                    buActive := false
+                    lastBUpin := na
+                    lastBUpinRef := na
+                    lastBUpinHi := na
+                    LL := na
+                    LH := na
+                    if not na(lhPinHi)
+                        lastBEpin := lhPinHi
+                        lastBEpinRef := lhPinRef
+                        lastBEpinLo := lhPinLo
+                        beActive := true
+                        beSeq := lhPinSeq
+                    expectedReady := beActive ? 1 : 0
+                    label.new(sb.bi, oldBUInvalid, "pinBU بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_up, color.white, size.tiny)
+            if not readyBeNow and beActive and not na(lastBEpinRef) and buSeq <= beSeq and sb.bi > 0
+                bool crossedRefBE = sb.o > lastBEpinRef or sb.c > lastBEpinRef
+                bool crossedHighBE = not na(lastBEpin) and (sb.o > lastBEpin or sb.c > lastBEpin)
+                if crossedRefBE or crossedHighBE
+                    float oldBEInvalid = lastBEpin
+                    beActive := false
+                    lastBEpin := na
+                    lastBEpinRef := na
+                    lastBEpinLo := na
+                    expectedReady := buActive ? -1 : 0
+                    label.new(sb.bi, oldBEInvalid, "pinBE بی‌اعتبار شد · پین پاک شد", xloc.bar_index, yloc.price, color.new(color.red, 30), label.style_label_down, color.white, size.tiny)
 
     if evChgDn or evTrendDn
         f_cancelDir(1)
@@ -945,7 +1115,7 @@ if aggM.closedNow and not na(aggM.cl) and array.size(setups) > 0
     for i = 0 to array.size(setups) - 1
         Setup s = array.get(setups, i)
         if s.stage >= 1 and s.stage < 7
-            if na(s.midRef) and mc.t == s.touchMidStart
+            if na(s.midRef) and (na(s.touchMidStart) or mc.t >= s.touchMidStart)
                 // ✔ تایید میانی
                 s.midRef := s.dir == 1 ? mc.l : mc.h
                 s.midBi := mc.bi
@@ -982,11 +1152,15 @@ if aggM.closedNow and not na(aggM.cl) and array.size(setups) > 0
                     s.stage := 2
                     s.lvBi := na
                     s.lvConfBi := na
+                    s.lvH := na
+                    s.lvL := na
                     s.hvBi := na
+                    s.hvConfBi := na
                     s.hvScanBi := na
                     s.runMax := na
                     s.lvTouched := false
                     s.lvUsed := false
+                    s.lvReEntered := false
                     f_delLine(s.l4)
                     f_delLine(s.l5)
                     f_delLine(s.l6)
@@ -1026,8 +1200,8 @@ if agg1.closedNow and not na(agg1.cl) and array.size(setups) > 0
         if s.stage >= 2 and s.stage <= 7 and not na(s.midRef) and q1.bi > s.midConfirmBi
             bool bullL = s.dir == 1
             bool lvConfirmedNow = false
-            // ── مارک / تایید / ابطال کندل ولوم کم ──
-            if not s.lvUsed and s.stage <= 4
+            // ── مارک / تایید / ابطال کندل ولوم کم (پیش از تایید اولیهٔ باکس) ──
+            if not s.lvUsed and na(s.lvConfBi) and s.stage <= 4
                 if na(s.lvBi)
                     if na(prevT1Vol) or q1.v < prevT1Vol
                         s.lvBi := q1.bi
@@ -1039,6 +1213,8 @@ if agg1.closedNow and not na(agg1.cl) and array.size(setups) > 0
                     bool confL = bullL ? q1.c > s.lvH : q1.c < s.lvL
                     if violL
                         s.lvBi := na
+                        s.lvH := na
+                        s.lvL := na
                     else if confL
                         s.lvConfBi := bar_index
                         lvConfirmedNow := true
@@ -1053,6 +1229,30 @@ if agg1.closedNow and not na(agg1.cl) and array.size(setups) > 0
                         s.l4 := f_setLine(s.l4, s.lvBi, s.lvH, color.new(color.yellow, 0))
                         s.l5 := f_setLine(s.l5, s.lvBi, s.lvL, color.new(color.yellow, 0))
                         label.new(q1.bi, bullL ? s.lvH : s.lvL, "ناحیه ولوم کم ✔  (تریگر۱)", xloc.bar_index, yloc.price, color.new(color.yellow, 15), bullL ? label.style_label_up : label.style_label_down, color.black, size.small)
+            // ── ابطال باکس ولوم کم پس از تایید (§4-7 سند نهایی) ──
+            if not lvConfirmedNow and not na(s.lvBi) and not na(s.lvConfBi) and not s.lvUsed
+                bool lvViolAfter = bullL ? q1.l < s.lvL : q1.h > s.lvH
+                if lvViolAfter
+                    if s.stage == 4 or s.stage == 5
+                        s.lvBi := na
+                        s.lvConfBi := na
+                        s.lvH := na
+                        s.lvL := na
+                        s.lvTouched := false
+                        s.lvReEntered := false
+                        s.hvBi := na
+                        s.hvConfBi := na
+                        s.hvScanBi := na
+                        s.runMax := na
+                        s.stage := 3
+                        f_delLine(s.l4); f_delLine(s.l5); f_delLine(s.l6); f_delLine(s.l7)
+                        s.l4 := na; s.l5 := na; s.l6 := na; s.l7 := na
+                        label.new(q1.bi, bullL ? q1.l : q1.h, "ناحیه ولوم کم باطل شد ✖", xloc.bar_index, yloc.price, color.new(color.red, 30), bullL ? label.style_label_up : label.style_label_down, color.white, size.tiny)
+                    else if s.stage == 6 or s.stage == 7
+                        s.lvUsed := true
+                        s.rearmAllowed := false
+                        f_delLine(s.l4); f_delLine(s.l5)
+                        s.l4 := na; s.l5 := na
             // ── یک‌بارمصرف بودن باکس ولوم کم ──
             //   کندل تاییدکننده برگشت نیست؛ بعد از اولین لمس، خروج فقط با کلوز سنجیده می‌شود.
             //   در stage=6 باکس مصرف می‌شود ولی سفارش معلق طبق تصمیم مالک زنده می‌ماند.
@@ -1092,6 +1292,54 @@ if array.size(setups) > 0
         Setup s = array.get(setups, i)
         bool bull = s.dir == 1
 
+        // ④ انقضا / ورود بعد از مسلح‌شدن (§4-8 و §4-9 سند نهایی)
+        if s.stage == 6 and bar_index > s.hvConfBi
+            bool openBreak = bull ? (not na(s.priceExpiryRef) and open > s.priceExpiryRef) : (not na(s.priceExpiryRef) and open < s.priceExpiryRef)
+            bool closeBreak = bull ? (not na(s.priceExpiryRef) and close > s.priceExpiryRef) : (not na(s.priceExpiryRef) and close < s.priceExpiryRef)
+            int nBars = math.max(1, math.round(secS / sec2))
+            bool barExpire = not na(s.armBi) and (bar_index - s.armBi) >= nBars
+            bool entryTouched = bull ? low <= s.hvH : high >= s.hvL
+            bool hvViol = bull ? low < s.hvL : high > s.hvH
+            if barExpire or openBreak or (not entryTouched and closeBreak)
+                string expRsn = barExpire ? "گذشت یک کندل ساختار" : "عبور باز/کلوز از پین مخالف"
+                s.hvBi := na
+                s.runMax := volume
+                s.stage := (s.lvUsed or barExpire) ? 8 : 4
+                s.note := "سفارش منقضی · " + expRsn
+                s.rearmAllowed := s.stage == 4
+                if entryPending and not na(trSetup) and trSetup == s
+                    strategy.cancel("L"); strategy.cancel("S")
+                    entryPending := false
+                    trSetup := na
+                f_delLine(s.l6); f_delLine(s.l7); f_delLine(s.l8); f_delLine(s.l9); f_delLine(s.l10)
+                s.l6 := na; s.l7 := na; s.l8 := na; s.l9 := na; s.l10 := na
+                label.new(bar_index, close, "انقضا · " + expRsn, xloc.bar_index, yloc.price, color.new(color.orange, 30), label.style_label_left, color.white, size.tiny)
+            else if entryTouched
+                s.entry := bull ? s.hvH : s.hvL
+                s.stage := 7
+                s.entryBi := bar_index
+                cEntry += 1
+                lastEntryPx := s.entry
+                lastSlPx := s.sl
+                lastTpPx := s.tpx
+                evEntryB := bull
+                evEntryS := not bull
+                label.new(bar_index, s.entry, (bull ? "ورود خرید" : "ورود فروش") + " @ " + str.tostring(s.entry, format.mintick), xloc.bar_index, yloc.price, color.new(bull ? color.green : color.red, 10), bull ? label.style_label_up : label.style_label_down, color.white, size.small)
+            else if hvViol
+                s.hvBi := na
+                s.runMax := volume
+                s.stage := s.lvUsed ? 8 : 4
+                s.note := "نقض HV؛ جست‌وجوی دوباره"
+                s.prevEntry := na
+                s.rearmAllowed := false
+                if entryPending and not na(trSetup) and trSetup == s
+                    strategy.cancel("L"); strategy.cancel("S")
+                    entryPending := false
+                    trSetup := na
+                f_delLine(s.l6); f_delLine(s.l7); f_delLine(s.l8); f_delLine(s.l9); f_delLine(s.l10)
+                s.l6 := na; s.l7 := na; s.l8 := na; s.l9 := na; s.l10 := na
+                label.new(bar_index, close, "نقض HV · اسکن از نو", xloc.bar_index, yloc.price, color.new(color.orange, 30), label.style_label_left, color.white, size.tiny)
+
         // هنگام معامله باز، نقض ساختار/میانی فقط مسلح‌مجدد را می‌بندد؛ خود معامله ادامه دارد.
         if s.stage == 7 and s.rearmAllowed and bar_index > s.zBi and (bull ? close < s.zBot : close > s.zTop)
             s.rearmAllowed := false
@@ -1110,8 +1358,8 @@ if array.size(setups) > 0
                 s.markBi := na
                 s.touchMidStart := aggM.cur.t
                 s.stage := 2
-                s.lvBi := na; s.lvConfBi := na; s.hvBi := na; s.hvConfBi := na; s.hvScanBi := na; s.runMax := na
-                s.lvTouched := false; s.lvUsed := false
+                s.lvBi := na; s.lvConfBi := na; s.lvH := na; s.lvL := na; s.hvBi := na; s.hvConfBi := na; s.hvScanBi := na; s.runMax := na
+                s.lvTouched := false; s.lvUsed := false; s.lvReEntered := false
                 f_delLine(s.l3); f_delLine(s.l4); f_delLine(s.l5); f_delLine(s.l6); f_delLine(s.l7); f_delLine(s.l8); f_delLine(s.l9); f_delLine(s.l10)
                 s.l3 := na; s.l4 := na; s.l5 := na; s.l6 := na; s.l7 := na; s.l8 := na; s.l9 := na; s.l10 := na
                 f_delLabel(s.midLbl); s.midLbl := na
@@ -1147,6 +1395,31 @@ if array.size(setups) > 0
                 f_killSetup(s)
                 label.new(bar_index, close, "لغو · شکست ناحیه ساختار", xloc.bar_index, yloc.price, color.new(color.red, 40), label.style_label_down, color.white, size.tiny)
 
+        // ②-ب ابطال باکس ولوم کم پس از تایید با عبور ۱ تیک از سمت مخالف (§4-7 سند نهایی)
+        if not s.lvUsed and not na(s.lvBi) and not na(s.lvConfBi) and bar_index > s.lvConfBi
+            bool lvViol = bull ? low < s.lvL : high > s.lvH
+            if lvViol
+                if s.stage == 4 or s.stage == 5
+                    s.lvBi := na
+                    s.lvConfBi := na
+                    s.lvH := na
+                    s.lvL := na
+                    s.lvTouched := false
+                    s.lvReEntered := false
+                    s.hvBi := na
+                    s.hvConfBi := na
+                    s.hvScanBi := na
+                    s.runMax := na
+                    s.stage := 3
+                    f_delLine(s.l4); f_delLine(s.l5); f_delLine(s.l6); f_delLine(s.l7)
+                    s.l4 := na; s.l5 := na; s.l6 := na; s.l7 := na
+                    label.new(bar_index, bull ? low : high, "ناحیه ولوم کم باطل شد ✖", xloc.bar_index, yloc.price, color.new(color.red, 30), bull ? label.style_label_up : label.style_label_down, color.white, size.tiny)
+                else if s.stage == 6 or s.stage == 7
+                    s.lvUsed := true
+                    s.rearmAllowed := false
+                    f_delLine(s.l4); f_delLine(s.l5)
+                    s.l4 := na; s.l5 := na
+
         // ③-الف بازگشت قیمت به باکس ولوم کم ← از این لحظه اسکن ولوم زیاد فعال می‌شود
         if s.stage == 4 and not s.zGone and not na(s.lvBi) and not s.lvReEntered
             if low <= s.lvH and high >= s.lvL
@@ -1162,7 +1435,7 @@ if array.size(setups) > 0
             if scanOK
                 bool marked = not na(s.hvBi)
                 bool viol = marked and (bull ? low < s.hvL : high > s.hvH)
-                bool conf = marked and volume > volume[1] and (bull ? close > s.hvH : close < s.hvL)
+                bool conf = marked and (bull ? close > s.hvH : close < s.hvL)
                 if viol
                     // ✖ نقض کندل مارک‌شده ← ناحیه حذف و کندل ولوم زیاد جدید جست‌وجو می‌شود
                     s.hvBi := na
@@ -1175,8 +1448,7 @@ if array.size(setups) > 0
                 else if conf
                     // ✔ ناحیه ولوم زیاد تایید شد → مسلح
                     //   ⚠ فقط اگر کارگزار/استراتژی در حال حاضر سفارش/پوزیشن باز نداشته باشد
-                    //   stage=6 می‌رویم. در غیر این صورت در stage=5 می‌مانیم تا بعداً دوباره تلاش
-                    //   شود (۷-۱۰: ورود شبح).
+                    //   stage=6 می‌رویم.
                     float eRef = bull ? s.hvH : s.hvL
                     s.sl := bull ? s.hvL - slBufTicks * syminfo.mintick : s.hvH + slBufTicks * syminfo.mintick
                     float a0 = bull ? highestBE : lowestBUpin
@@ -1224,14 +1496,24 @@ if array.size(setups) > 0
                                     tp2loc := eRef - (eRef - tpxloc) * 0.5
                     // مسلح‌مجدد فقط تا پیش از گذشت یک بازهٔ ساختار کامل از آخرین arm مجاز است؛
                     // ورود هم باید بهتر باشد. نقض HV، prevEntry را پاک می‌کند و اسکن را از نو می‌سازد.
+                    bool hasActiveOrder = false
+                    for m = 0 to array.size(setups) - 1
+                        if m != i
+                            Setup o = array.get(setups, m)
+                            if o.stage == 6 or o.stage == 7
+                                hasActiveOrder := true
                     bool isRearm = not na(s.prevEntry)
                     bool betterEntry = bull ? eRef < s.prevEntry : eRef > s.prevEntry
                     bool rearmPrereqs = not s.zGone and not na(s.midRef) and not na(s.lvBi) and s.lvReEntered and not s.lvUsed
                     bool rearmOK = not isRearm or (s.rearmAllowed and rearmPrereqs and betterEntry)
-                    bool canArm = rearmOK and not entryPending and strategy.position_size == 0
+                    bool canArm = rearmOK and not hasActiveOrder and not entryPending and strategy.position_size == 0
                     if not canArm
                         s.hvBi := na
                         s.runMax := volume
+                        f_delLine(s.l6)
+                        f_delLine(s.l7)
+                        s.l6 := na
+                        s.l7 := na
                     else
                         s.tp1 := tp1loc
                         s.tp2 := tp2loc
@@ -1294,56 +1576,6 @@ if array.size(setups) > 0
                         s.l6 := f_setLine(s.l6, bar_index, high, color.new(color.blue, 0))
                         s.l7 := f_setLine(s.l7, bar_index, low, color.new(color.blue, 0))
                         label.new(bar_index, bull ? low : high, "کندل ولوم زیاد (مارک)", xloc.bar_index, yloc.price, color.new(color.blue, 25), bull ? label.style_label_up : label.style_label_down, color.white, size.tiny)
-
-        // ④ انقضا / ورود بعد از مسلح‌شدن
-        if s.stage == 6 and bar_index > s.hvConfBi
-            bool pinBreak = bull ? (not na(s.priceExpiryRef) and (open > s.priceExpiryRef or close > s.priceExpiryRef)) : (not na(s.priceExpiryRef) and (open < s.priceExpiryRef or close < s.priceExpiryRef))
-            int nBars = math.max(1, math.round(secS / sec2))
-            bool barExpire = not na(s.armBi) and (bar_index - s.armBi) >= nBars
-            bool expired = pinBreak or barExpire
-            string expRsn = barExpire ? "گذشت یک کندل ساختار" : "عبور باز/کلوز از پین مخالف"
-            if expired
-                s.hvBi := na
-                s.runMax := volume
-                s.stage := (s.lvUsed or barExpire) ? 8 : 4
-                s.note := "سفارش منقضی · " + expRsn
-                s.rearmAllowed := s.stage == 4
-                if entryPending and not na(trSetup) and trSetup == s
-                    strategy.cancel("L"); strategy.cancel("S")
-                    entryPending := false
-                    trSetup := na
-                f_delLine(s.l6); f_delLine(s.l7); f_delLine(s.l8); f_delLine(s.l9); f_delLine(s.l10)
-                s.l6 := na; s.l7 := na; s.l8 := na; s.l9 := na; s.l10 := na
-                label.new(bar_index, close, "انقضا · " + expRsn, xloc.bar_index, yloc.price, color.new(color.orange, 30), label.style_label_left, color.white, size.tiny)
-            else
-                bool entryTouched = bull ? low <= s.hvH : high >= s.hvL
-                bool hvViol = bull ? low < s.hvL : high > s.hvH
-                // اگر ورود و نقض دوردست در یک کندل باشند، قیمت اول به لبهٔ ورود می‌رسد.
-                if entryTouched
-                    s.entry := bull ? s.hvH : s.hvL
-                    s.stage := 7
-                    s.entryBi := bar_index
-                    cEntry += 1
-                    lastEntryPx := s.entry
-                    lastSlPx := s.sl
-                    lastTpPx := s.tpx
-                    evEntryB := bull
-                    evEntryS := not bull
-                    label.new(bar_index, s.entry, (bull ? "ورود خرید" : "ورود فروش") + " @ " + str.tostring(s.entry, format.mintick), xloc.bar_index, yloc.price, color.new(bull ? color.green : color.red, 10), bull ? label.style_label_up : label.style_label_down, color.white, size.small)
-                else if hvViol
-                    s.hvBi := na
-                    s.runMax := volume
-                    s.stage := s.lvUsed ? 8 : 4
-                    s.note := "نقض HV؛ جست‌وجوی دوباره"
-                    s.prevEntry := na
-                    s.rearmAllowed := false
-                    if entryPending and not na(trSetup) and trSetup == s
-                        strategy.cancel("L"); strategy.cancel("S")
-                        entryPending := false
-                        trSetup := na
-                    f_delLine(s.l6); f_delLine(s.l7); f_delLine(s.l8); f_delLine(s.l9); f_delLine(s.l10)
-                    s.l6 := na; s.l7 := na; s.l8 := na; s.l9 := na; s.l10 := na
-                    label.new(bar_index, close, "نقض HV · اسکن از نو", xloc.bar_index, yloc.price, color.new(color.orange, 30), label.style_label_left, color.white, size.tiny)
 
         // ⑤ مدیریت معامله : حدضرر / سر‌به‌سر / حدسود
         //   ترتیب: SL/TPX اول پایان می‌دهند. TP1 و TP2 پله‌های میانی‌اند و می‌توانند در
@@ -1463,14 +1695,20 @@ if flatNow and entryPending and not setupAlive
     strategy.cancel("S")
     entryPending := false
 
-// ② تمدید سفارش ورود لیمیت هر کندل (تا حتماً فعال باشد)
+// ② تمدید سفارش ورود لیمیت و خروج‌های وابسته هر کندل (تا در کندل ورود نیز حدضرر/حدسود فعال باشد)
 //   ۷-۸: سفارش در همان کندل مسلح شدن (bar_index == entryBar) پر نمی‌شود — مطابق
 //   §۲-۸ «برگشت به لبه» از کندل بعد.
 if flatNow and entryPending and setupAlive and not na(trEntry) and bar_index > entryBar
     if trDir == 1
         strategy.entry("L", strategy.long, qty = trQ1 + trQ2 + trQ3, limit = trEntry, comment = "PinReady-L")
+        strategy.exit("X1", from_entry = "L", qty = trQ1, limit = trTp1, stop = trSl)
+        strategy.exit("X2", from_entry = "L", qty = trQ2, limit = trTp2, stop = trSl)
+        strategy.exit("X3", from_entry = "L", qty = trQ3, limit = trTp, stop = trSl)
     else
         strategy.entry("S", strategy.short, qty = trQ1 + trQ2 + trQ3, limit = trEntry, comment = "PinReady-S")
+        strategy.exit("X1", from_entry = "S", qty = trQ1, limit = trTp1, stop = trSl)
+        strategy.exit("X2", from_entry = "S", qty = trQ2, limit = trTp2, stop = trSl)
+        strategy.exit("X3", from_entry = "S", qty = trQ3, limit = trTp, stop = trSl)
 
 // ③ تشخیص پر شدن ورود
 if not inPos and strategy.position_size != 0

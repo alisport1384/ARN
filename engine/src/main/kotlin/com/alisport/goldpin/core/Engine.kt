@@ -95,6 +95,11 @@ class Engine(val cfg: Settings) {
 
     var trend = 0
     var HH = Double.NaN; var HL = Double.NaN; var LL = Double.NaN; var LH = Double.NaN
+    var tempBoxTop = Double.NaN; var tempBoxBot = Double.NaN
+    var hlPinLo = Double.NaN; var hlPinRef = Double.NaN; var hlPinHi = Double.NaN; var hlPinSeq = -1
+    var hhPinHi = Double.NaN; var hhPinRef = Double.NaN; var hhPinLo = Double.NaN; var hhPinSeq = -1
+    var lhPinHi = Double.NaN; var lhPinRef = Double.NaN; var lhPinLo = Double.NaN; var lhPinSeq = -1
+    var llPinLo = Double.NaN; var llPinRef = Double.NaN; var llPinHi = Double.NaN; var llPinSeq = -1
     var seqStart = 0
     var bullBU1Low = Double.NaN; var bullBEHigh = Double.NaN; var bullBU2Low = Double.NaN; var bullBU2Bi = -1
     var bearBE1High = Double.NaN; var bearBULow = Double.NaN; var bearBE2High = Double.NaN; var bearBE2Bi = -1
@@ -160,6 +165,11 @@ class Engine(val cfg: Settings) {
         structBars.clear(); pins.clear(); setups.clear(); microS.clear()
         zones.clear(); markers.clear(); events.clear()
         trend = 0; HH = Double.NaN; HL = Double.NaN; LL = Double.NaN; LH = Double.NaN
+        tempBoxTop = Double.NaN; tempBoxBot = Double.NaN
+        hlPinLo = Double.NaN; hlPinRef = Double.NaN; hlPinHi = Double.NaN; hlPinSeq = -1
+        hhPinHi = Double.NaN; hhPinRef = Double.NaN; hhPinLo = Double.NaN; hhPinSeq = -1
+        lhPinHi = Double.NaN; lhPinRef = Double.NaN; lhPinLo = Double.NaN; lhPinSeq = -1
+        llPinLo = Double.NaN; llPinRef = Double.NaN; llPinHi = Double.NaN; llPinSeq = -1
         seqStart = 0
         bullBU1Low = Double.NaN; bullBEHigh = Double.NaN; bullBU2Low = Double.NaN; bullBU2Bi = -1
         bearBE1High = Double.NaN; bearBULow = Double.NaN; bearBE2High = Double.NaN; bearBE2Bi = -1
@@ -329,22 +339,16 @@ class Engine(val cfg: Settings) {
             val b = structBars[nS - 1]
             if (a.c < a.o && b.c > b.o) {                       // کندل مهم در پایین‌ترین‌ها
                 val (impH, impL, impBi) = pickLow(a, b)
-                // سطح ابطال از **خودِ کندل مهم** گرفته می‌شود، نه از دو کندل مختلف.
-                // کندل مهم صعودی باشد (کلوز > اوپن) ⇒ ref = اوپن
-                // کندل مهم نزولی باشد (کلوز < اوپن) ⇒ ref = کلوز
-                // یعنی همیشه پایین‌ترِ دو لبهٔ بدنهٔ کندل مهم.
-                val impA = (impBi == a.bi)
-                val refLo = if (impA) min(a.c, a.o) else min(b.c, b.o)
+                // §4-1 سند نهایی: سطح ابطال پایین‌ترین کندل‌ها = کمترین قیمت بین قیمت بسته شدن کندل اول و قیمت باز شدن کندل دوم
+                val refLo = min(a.c, b.o)
                 pins.add(Pin(1, impH, impL, impBi, b.bi, refLo, 0))
                 lg("ENGINE", "کاندید کندل مهم پایین‌ترین‌ها ثبت شد",
                     "kind=BU hi=${f2(impH)} lo=${f2(impL)} ref=${f2(refLo)} bar=${b.bi}")
             }
             if (a.c > a.o && b.c < b.o) {                       // کندل مهم در بالاترین‌ها
                 val (impH2, impL2, impBi2) = pickHigh(a, b)
-                // قرینه: همیشه بالاترینِ دو لبهٔ بدنهٔ کندل مهم.
-                // کندل مهم صعودی ⇒ ref = کلوز · نزولی ⇒ ref = اوپن
-                val impA2 = (impBi2 == a.bi)
-                val refHi = if (impA2) max(a.c, a.o) else max(b.c, b.o)
+                // §4-1 سند نهایی: سطح ابطال بالاترین کندل‌ها = بیشترین قیمت بین قیمت بسته شدن کندل اول و قیمت باز شدن کندل دوم
+                val refHi = max(a.c, b.o)
                 pins.add(Pin(-1, impH2, impL2, impBi2, b.bi, refHi, 0))
                 lg("ENGINE", "کاندید کندل مهم بالاترین‌ها ثبت شد",
                     "kind=BE hi=${f2(impH2)} lo=${f2(impL2)} ref=${f2(refHi)} bar=${b.bi}")
@@ -352,7 +356,7 @@ class Engine(val cfg: Settings) {
         }
 
         // ── چرخهٔ عمر کاندیدها : ابطال / Ready ──
-        // §4-2 سند نهایی: مرگ کاندید با «باز یا کلوز» آن‌طرف ref، مقایسه اکید
+        // §4-1 سند نهایی: مرگ کاندید با «باز یا کلوز» آن‌طرف ref، مقایسه اکید
         // (تساوی نمی‌کُشد). Ready فقط با کلوز بالای سقف / زیر کف.
         for (p in pins) {
             if (p.status == 0 && sb.bi > p.startBi) {
@@ -367,12 +371,15 @@ class Engine(val cfg: Settings) {
         }
 
         // ── انتخاب Ready با تناوب سخت BU↔BE ──
+        var readyBuNow = false
+        var readyBeNow = false
         if (pins.isNotEmpty()) {
             if (expectedReady == 0 || expectedReady == 1) {
                 val iBU = bestReady(pins, 1)
                 if (iBU >= 0) {
                     val pBU = pins[iBU]
                     if (!hasBetterActive(pins, 1, pBU.lo)) {
+                        readyBuNow = true
                         lastBUpin = pBU.lo
                         lastBUpinRef = pBU.ref; lastBUpinHi = pBU.hi
                         buActive = true; buSeq = ++pinSeq
@@ -381,11 +388,15 @@ class Engine(val cfg: Settings) {
                         lg("ENGINE", "Ready BU (pinBU) تایید شد", "lo=${f2(pBU.lo)} hi=${f2(pBU.hi)} bar=${sb.bi}")
                         alarm(AlertKind.PIN, "کندل مهم · Ready BU",
                             "کف ${f2(pBU.lo)} — کندل مهم پایین‌ترین‌ها تایید شد (${Tf.label(cfg.tfS)})")
-                        // §4-4 سند نهایی: pinBU به‌تنهایی روند نمی‌سازد. در روند صعودی
-                        // تثبیت‌شده HL از pinBU قبلی می‌آید و با هر pinBU تازه عوض
-                        // نمی‌شود مگر اینکه چرخش یا حذفی رخ داده باشد (تصمیم ۱٫۴٫۹).
                         expectedReady = -1
                         pins.clear()
+                        if (trend == 0 && beActive && !lastBEpin.isNaN()) {
+                            tempBoxTop = lastBEpin; tempBoxBot = lastBUpin
+                        } else if (trend == -1 && !lastBEpin.isNaN()) {
+                            LL = lastBUpin; LH = lastBEpin
+                            lhPinHi = lastBEpin; lhPinRef = lastBEpinRef; lhPinLo = lastBEpinLo; lhPinSeq = beSeq
+                            llPinLo = lastBUpin; llPinRef = lastBUpinRef; llPinHi = lastBUpinHi; llPinSeq = buSeq
+                        }
                     }
                 }
             }
@@ -394,6 +405,7 @@ class Engine(val cfg: Settings) {
                 if (iBE >= 0) {
                     val pBE = pins[iBE]
                     if (!hasBetterActive(pins, -1, pBE.hi)) {
+                        readyBeNow = true
                         lastBEpin = pBE.hi
                         lastBEpinRef = pBE.ref; lastBEpinLo = pBE.lo
                         beActive = true; beSeq = ++pinSeq
@@ -404,118 +416,224 @@ class Engine(val cfg: Settings) {
                             "سقف ${f2(pBE.hi)} — کندل مهم بالاترین‌ها تایید شد (${Tf.label(cfg.tfS)})")
                         expectedReady = 1
                         pins.clear()
+                        if (trend == 0 && buActive && !lastBUpin.isNaN()) {
+                            tempBoxTop = lastBEpin; tempBoxBot = lastBUpin
+                        } else if (trend == 1 && !lastBUpin.isNaN()) {
+                            HH = lastBEpin; HL = lastBUpin
+                            hlPinLo = lastBUpin; hlPinRef = lastBUpinRef; hlPinHi = lastBUpinHi; hlPinSeq = buSeq
+                            hhPinHi = lastBEpin; hhPinRef = lastBEpinRef; hhPinLo = lastBEpinLo; hhPinSeq = beSeq
+                        }
                     }
                 }
             }
         }
 
-        // ── ابطال پین **بعد از** Ready (سند نهایی §4-3) ──
-        // · §4-3: باز یا کلوز از ref یا لبهٔ پین عبور کند و توالی چرخش نباشد ⇒
-        //   پین کامل پاک می‌شود؛ سایه و تساوی نقشی ندارند.
-        // · چرخش روند جداگانه در بلوک trend، فقط با کلوز کندل ساختار بررسی می‌شود.
-        if (buActive && !lastBUpinRef.isNaN() && sb.bi > 0) {
-            // §4-3/§۳ سند نهایی: فقط باز یا کلوز از ref یا کف پین عبور کند (اکید؛
-            //   سایه و تساوی کاری نمی‌کند). اگر pinBE **بعد از** این pinBU ثبت شده
-            //   باشد (beSeq > buSeq) این یک توالی چرخش است و پین پاک نمی‌شود.
-            val crossedRef = (sb.o < lastBUpinRef || sb.c < lastBUpinRef)
-            val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
-            // توالی چرخش = پین مخالف بعد از این پین ثبت شده باشد (نه صرفاً فعال بودن).
-            val isRotation = beSeq > buSeq
-            if ((crossedRef || crossedLow) && !isRotation) {
-                val oldPin = lastBUpin
-                val oldRef = lastBUpinRef
-                clearBUpin()
-                addMarker(sb.bi, oldPin, 10, "pinBU بی‌اعتبار شد")
-                lg("ENGINE", "pinBU بی‌اعتبار شد — پین کامل پاک شد",
-                    "ref=${f2(oldRef)} lo=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
-            }
-        }
-        if (beActive && !lastBEpinRef.isNaN() && sb.bi > 0) {
-            val crossedRef = (sb.o > lastBEpinRef || sb.c > lastBEpinRef)
-            val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
-            val isRotation = buSeq > beSeq
-            if ((crossedRef || crossedHigh) && !isRotation) {
-                val oldPin = lastBEpin
-                val oldRef = lastBEpinRef
-                clearBEpin()
-                addMarker(sb.bi, oldPin, 10, "pinBE بی‌اعتبار شد")
-                lg("ENGINE", "pinBE بی‌اعتبار شد — پین کامل پاک شد",
-                    "ref=${f2(oldRef)} hi=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
-            }
-        }
-
-        // ── تعیین / ادامه / تغییر روند (فقط با کلوز کندل ساختار) ──
+        // ── تعیین / ادامه / تغییر روند و ابطال پین‌ها (§4-1 سند نهایی) ──
         var evTrendUp = false; var evTrendDn = false
         var evChgUp = false; var evChgDn = false
         when (trend) {
-            // ── docs/19 بند ۵-۲: در اول چارت هیچ روندی معلوم نیست؛ منتظر **توالی** می‌مانیم.
-            //    توالی یعنی هر دو pinBU و pinBE وجود داشته باشند. آنگاه:
-            //      کلوز بالای سقف pinBE ⇒ روند صعودی · کلوز زیر کف pinBU ⇒ روند نزولی
-            //    (هر چهار ترکیبِ ترتیبِ کارفرما به همین دو قاعده فرومی‌کاهد.)
             0 -> {
-                if (!lastBUpin.isNaN() && !lastBEpin.isNaN()) {
-                    if (sb.c > lastBEpin) {
-                        trend = 1; HH = lastBEpin; HL = lastBUpin; evTrendUp = true
-                        // ۷-۶: reset مراجع فیبو به سکانس جدید
-                        highestBE = lastBEpin; lowestBUpin = lastBUpin
+                if (!tempBoxTop.isNaN() && !tempBoxBot.isNaN()) {
+                    if (sb.c > tempBoxTop) {
+                        val top = tempBoxTop; val bot = tempBoxBot
+                        trend = 1; evTrendUp = true
+                        highestBE = top; lowestBUpin = bot
+                        tempBoxTop = Double.NaN; tempBoxBot = Double.NaN
+                        HH = Double.NaN; HL = Double.NaN
+                        // در شروع روند صعودی، pinBU پایهٔ HL بعدی می‌ماند و منتظر اولین pinBE (HH) هستیم
+                        beActive = false
+                        buActive = true
+                        if (buSeq < beSeq) buSeq = ++pinSeq
+                        expectedReady = -1
                         lg("ENGINE", "روند صعودی تثبیت شد (توالی)",
-                            "pinBE=${f2(lastBEpin)} pinBU=${f2(lastBUpin)} close=${f2(sb.c)}")
+                            "tempBoxTop=${f2(top)} tempBoxBot=${f2(bot)} close=${f2(sb.c)}")
                         alarm(AlertKind.TREND, "روند صعودی شد",
-                            "توالی کامل · کلوز ${f2(sb.c)} بالای سقف pinBE ${f2(lastBEpin)}")
-                    } else if (sb.c < lastBUpin) {
-                        trend = -1; LL = lastBUpin; LH = lastBEpin; evTrendDn = true
-                        // ۷-۶: reset مراجع فیبو به سکانس جدید
-                        highestBE = lastBEpin; lowestBUpin = lastBUpin
+                            "توالی کامل · کلوز ${f2(sb.c)} بالای سقف tempbox ${f2(top)}")
+                    } else if (sb.c < tempBoxBot) {
+                        val top = tempBoxTop; val bot = tempBoxBot
+                        trend = -1; evTrendDn = true
+                        highestBE = top; lowestBUpin = bot
+                        tempBoxTop = Double.NaN; tempBoxBot = Double.NaN
+                        LL = Double.NaN; LH = Double.NaN
+                        // در شروع روند نزولی، pinBE پایهٔ LH بعدی می‌ماند و منتظر اولین pinBU (LL) هستیم
+                        buActive = false
+                        beActive = true
+                        if (beSeq < buSeq) beSeq = ++pinSeq
+                        expectedReady = 1
                         lg("ENGINE", "روند نزولی تثبیت شد (توالی)",
-                            "pinBU=${f2(lastBUpin)} pinBE=${f2(lastBEpin)} close=${f2(sb.c)}")
+                            "tempBoxBot=${f2(bot)} tempBoxTop=${f2(top)} close=${f2(sb.c)}")
                         alarm(AlertKind.TREND, "روند نزولی شد",
-                            "توالی کامل · کلوز ${f2(sb.c)} زیر کف pinBU ${f2(lastBUpin)}")
+                            "توالی کامل · کلوز ${f2(sb.c)} زیر کف tempbox ${f2(bot)}")
+                    }
+                }
+                if (trend == 0 && sb.bi > 0) {
+                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq) {
+                        val crossedRef = sb.o < lastBUpinRef || sb.c < lastBUpinRef
+                        val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
+                        if (crossedRef || crossedLow) {
+                            val oldPin = lastBUpin; val oldRef = lastBUpinRef
+                            clearBUpin()
+                            tempBoxTop = Double.NaN; tempBoxBot = Double.NaN
+                            expectedReady = if (beActive) 1 else 0
+                            addMarker(sb.bi, oldPin, 10, "pinBU بی‌اعتبار شد")
+                            lg("ENGINE", "pinBU بی‌اعتبار و حذف شد — پین کامل پاک شد",
+                                "ref=${f2(oldRef)} lo=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                        }
+                    }
+                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq) {
+                        val crossedRef = sb.o > lastBEpinRef || sb.c > lastBEpinRef
+                        val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
+                        if (crossedRef || crossedHigh) {
+                            val oldPin = lastBEpin; val oldRef = lastBEpinRef
+                            clearBEpin()
+                            tempBoxTop = Double.NaN; tempBoxBot = Double.NaN
+                            expectedReady = if (buActive) -1 else 0
+                            addMarker(sb.bi, oldPin, 10, "pinBE بی‌اعتبار شد")
+                            lg("ENGINE", "pinBE بی‌اعتبار و حذف شد — پین کامل پاک شد",
+                                "ref=${f2(oldRef)} hi=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                        }
                     }
                 }
             }
             1 -> {
-                if (sb.c > HH) HH = sb.c
-                if (!lastBUpin.isNaN() && sb.c < lastBUpin) {
-                    // §4-3/۴-۴ سند نهایی: چرخش روند فقط با **توالی چرخش**
-                    // (وجود pinBE بعد از این pinBU). بدون توالی: پین کامل پاک
-                    // می‌شود و HL نگه داشته نمی‌شود.
-                    // توجه: شکست کف با **کلوز** کندل ساختار است (سند §4-4).
-                    if (beSeq > buSeq) {
-                        trend = -1; LL = lastBUpin; LH = HH; evChgDn = true
-                        highestBE = HH; lowestBUpin = lastBUpin
-                        // بعد از چرخش پین قدیمی را به‌عنوان بخشی از روند جدید نگه می‌داریم
-                        // (LL = lastBUpin)؛ فقط پرچم فعال خاموش می‌شود.
-                        buActive = false
-                        lg("ENGINE", "چرخش روند به نزولی (کلوز زیر pinBU · توالی کامل)",
-                            "pinBU=${f2(lastBUpin)} close=${f2(sb.c)}")
-                        alarm(AlertKind.TREND, "چرخش روند به نزولی",
-                            "کلوز ${f2(sb.c)} زیر کف pinBU ${f2(lastBUpin)} بسته شد")
-                    } else if (buActive) {
-                        val oldPin = lastBUpin
-                        clearBUpin()
-                        addMarker(sb.bi, oldPin, 10, "pinBU حذف شد (شکست کف بدون توالی)")
-                        lg("ENGINE", "کلوز زیر pinBU ولی توالی کامل نبود — pinBU کامل پاک شد، روند صعودی ماند",
-                            "pinBU=${f2(oldPin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
+                // ۱) چرخش روند از صعودی به نزولی: بسته شدن حتی یک تیک زیر HL (شامل تبصرهٔ هم‌زمانی ReadyBE و شکست HL)
+                if (!HL.isNaN() && sb.c < HL) {
+                    val oldHL = HL; val oldHH = HH
+                    trend = -1; evChgDn = true
+                    highestBE = oldHH; lowestBUpin = oldHL
+                    HH = Double.NaN; HL = Double.NaN; LL = Double.NaN; LH = Double.NaN
+                    clearBUpin()
+                    if (!hhPinHi.isNaN()) {
+                        lastBEpin = hhPinHi; lastBEpinRef = hhPinRef; lastBEpinLo = hhPinLo
+                        beActive = true; beSeq = ++pinSeq
+                    }
+                    expectedReady = 1
+                    lg("ENGINE", "چرخش روند به نزولی (کلوز زیر HL · توالی کامل)",
+                        "HL=${f2(oldHL)} HH=${f2(oldHH)} close=${f2(sb.c)}")
+                    alarm(AlertKind.TREND, "چرخش روند به نزولی",
+                        "کلوز ${f2(sb.c)} زیر کف HL ${f2(oldHL)} بسته شد")
+                } else {
+                    // ۲) ادامهٔ روند صعودی: بسته شدن بالای HH ⇒ برگشت HH به pinBE و HL به pinBU
+                    if (!HH.isNaN() && sb.c > HH) {
+                        if (buSeq < beSeq) {
+                            clearBEpin()
+                            HH = Double.NaN; HL = Double.NaN
+                            if (!hlPinLo.isNaN()) {
+                                lastBUpin = hlPinLo; lastBUpinRef = hlPinRef; lastBUpinHi = hlPinHi
+                                buActive = true; buSeq = hlPinSeq
+                            }
+                            expectedReady = -1
+                        } else {
+                            HH = Double.NaN; HL = Double.NaN
+                            expectedReady = -1
+                        }
+                    }
+                    // ۳) ابطال pinBE بدون ثبت pinBU بعد از آن: HH و HL پاک می‌شوند و HL به pinBU برمی‌گردد
+                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq && sb.bi > 0) {
+                        val crossedRef = sb.o > lastBEpinRef || sb.c > lastBEpinRef
+                        val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
+                        if (crossedRef || crossedHigh) {
+                            val oldPin = lastBEpin; val oldRef = lastBEpinRef
+                            clearBEpin()
+                            HH = Double.NaN; HL = Double.NaN
+                            if (!hlPinLo.isNaN()) {
+                                lastBUpin = hlPinLo; lastBUpinRef = hlPinRef; lastBUpinHi = hlPinHi
+                                buActive = true; buSeq = hlPinSeq
+                            }
+                            expectedReady = if (buActive) -1 else 0
+                            addMarker(sb.bi, oldPin, 10, "pinBE بی‌اعتبار شد")
+                            lg("ENGINE", "pinBE بی‌اعتبار و حذف شد — پین کامل پاک شد",
+                                "ref=${f2(oldRef)} hi=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                        }
+                    }
+                    // ۴) ابطال pinBU بدون ثبت pinBE بعد از آن
+                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq && sb.bi > 0) {
+                        val crossedRef = sb.o < lastBUpinRef || sb.c < lastBUpinRef
+                        val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
+                        val closedBelowPin = !lastBUpin.isNaN() && sb.c < lastBUpin
+                        if (crossedRef || crossedLow) {
+                            val oldPin = lastBUpin; val oldRef = lastBUpinRef
+                            clearBUpin()
+                            expectedReady = if (beActive) 1 else 0
+                            addMarker(sb.bi, oldPin, 10, "pinBU بی‌اعتبار شد")
+                            lg("ENGINE", "pinBU بی‌اعتبار و حذف شد — پین کامل پاک شد",
+                                "ref=${f2(oldRef)} lo=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                            if (closedBelowPin) {
+                                lg("ENGINE", "کلوز زیر pinBU ولی توالی کامل نبود — فقط pinBU حذف شد، روند صعودی ماند",
+                                    "pinBU=${f2(oldPin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
+                            }
+                        }
                     }
                 }
             }
             -1 -> {
-                if (sb.c < LL) LL = sb.c
-                if (!lastBEpin.isNaN() && sb.c > lastBEpin) {
-                    if (buSeq > beSeq) {
-                        trend = 1; HH = lastBEpin; HL = LL; evChgUp = true
-                        highestBE = lastBEpin; lowestBUpin = LL
-                        beActive = false
-                        lg("ENGINE", "چرخش روند به صعودی (کلوز بالای pinBE · توالی کامل)",
-                            "pinBE=${f2(lastBEpin)} close=${f2(sb.c)}")
-                        alarm(AlertKind.TREND, "چرخش روند به صعودی",
-                            "کلوز ${f2(sb.c)} بالای سقف pinBE ${f2(lastBEpin)} بسته شد")
-                    } else if (beActive) {
-                        val oldPin = lastBEpin
-                        clearBEpin()
-                        addMarker(sb.bi, oldPin, 10, "pinBE حذف شد (شکست سقف بدون توالی)")
-                        lg("ENGINE", "کلوز بالای pinBE ولی توالی کامل نبود — pinBE کامل پاک شد، روند نزولی ماند",
-                            "pinBE=${f2(oldPin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
+                // ۱) چرخش روند از نزولی به صعودی: بسته شدن حتی یک تیک بالای LH (شامل تبصرهٔ هم‌زمانی ReadyBU و شکست LH)
+                if (!LH.isNaN() && sb.c > LH) {
+                    val oldLH = LH; val oldLL = LL
+                    trend = 1; evChgUp = true
+                    highestBE = oldLH; lowestBUpin = oldLL
+                    HH = Double.NaN; HL = Double.NaN; LL = Double.NaN; LH = Double.NaN
+                    clearBEpin()
+                    if (!llPinLo.isNaN()) {
+                        lastBUpin = llPinLo; lastBUpinRef = llPinRef; lastBUpinHi = llPinHi
+                        buActive = true; buSeq = ++pinSeq
+                    }
+                    expectedReady = -1
+                    lg("ENGINE", "چرخش روند به صعودی (کلوز بالای LH · توالی کامل)",
+                        "LH=${f2(oldLH)} LL=${f2(oldLL)} close=${f2(sb.c)}")
+                    alarm(AlertKind.TREND, "چرخش روند به صعودی",
+                        "کلوز ${f2(sb.c)} بالای سقف LH ${f2(oldLH)} بسته شد")
+                } else {
+                    // ۲) ادامهٔ روند نزولی: بسته شدن زیر LL ⇒ برگشت LL به pinBU و LH به pinBE
+                    if (!LL.isNaN() && sb.c < LL) {
+                        if (beSeq < buSeq) {
+                            clearBUpin()
+                            LL = Double.NaN; LH = Double.NaN
+                            if (!lhPinHi.isNaN()) {
+                                lastBEpin = lhPinHi; lastBEpinRef = lhPinRef; lastBEpinLo = lhPinLo
+                                beActive = true; beSeq = lhPinSeq
+                            }
+                            expectedReady = 1
+                        } else {
+                            LL = Double.NaN; LH = Double.NaN
+                            expectedReady = 1
+                        }
+                    }
+                    // ۳) ابطال pinBU بدون ثبت pinBE بعد از آن: LL و LH پاک می‌شوند و LH به pinBE برمی‌گردد
+                    if (!readyBuNow && buActive && !lastBUpinRef.isNaN() && beSeq <= buSeq && sb.bi > 0) {
+                        val crossedRef = sb.o < lastBUpinRef || sb.c < lastBUpinRef
+                        val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
+                        if (crossedRef || crossedLow) {
+                            val oldPin = lastBUpin; val oldRef = lastBUpinRef
+                            clearBUpin()
+                            LL = Double.NaN; LH = Double.NaN
+                            if (!lhPinHi.isNaN()) {
+                                lastBEpin = lhPinHi; lastBEpinRef = lhPinRef; lastBEpinLo = lhPinLo
+                                beActive = true; beSeq = lhPinSeq
+                            }
+                            expectedReady = if (beActive) 1 else 0
+                            addMarker(sb.bi, oldPin, 10, "pinBU بی‌اعتبار شد")
+                            lg("ENGINE", "pinBU بی‌اعتبار و حذف شد — پین کامل پاک شد",
+                                "ref=${f2(oldRef)} lo=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                        }
+                    }
+                    // ۴) ابطال pinBE بدون ثبت pinBU بعد از آن
+                    if (!readyBeNow && beActive && !lastBEpinRef.isNaN() && buSeq <= beSeq && sb.bi > 0) {
+                        val crossedRef = sb.o > lastBEpinRef || sb.c > lastBEpinRef
+                        val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
+                        val closedAbovePin = !lastBEpin.isNaN() && sb.c > lastBEpin
+                        if (crossedRef || crossedHigh) {
+                            val oldPin = lastBEpin; val oldRef = lastBEpinRef
+                            clearBEpin()
+                            expectedReady = if (buActive) -1 else 0
+                            addMarker(sb.bi, oldPin, 10, "pinBE بی‌اعتبار شد")
+                            lg("ENGINE", "pinBE بی‌اعتبار و حذف شد — پین کامل پاک شد",
+                                "ref=${f2(oldRef)} hi=${f2(oldPin)} o=${f2(sb.o)} c=${f2(sb.c)}")
+                            if (closedAbovePin) {
+                                lg("ENGINE", "کلوز بالای pinBE ولی توالی کامل نبود — فقط pinBE حذف شد، روند نزولی ماند",
+                                    "pinBE=${f2(oldPin)} close=${f2(sb.c)} buSeq=$buSeq beSeq=$beSeq")
+                            }
+                        }
                     }
                 }
             }
@@ -596,7 +714,7 @@ class Engine(val cfg: Settings) {
     private fun middleEngine(mc: Candle) {
         for (s in setups) {
             if (s.stage < 1 || s.stage >= 7) continue
-            if (s.midRef.isNaN() && mc.t == s.touchMidStart) {
+            if (s.midRef.isNaN() && (s.touchMidStart <= 0L || mc.t >= s.touchMidStart)) {
                 // ✔ تایید میانی
                 s.midRef = if (s.dir == 1) mc.l else mc.h
                 s.midBi = mc.bi
@@ -628,8 +746,9 @@ class Engine(val cfg: Settings) {
                     s.midRef = Double.NaN; s.midBi = -1; s.markBi = -1
                     s.touchMidStart = aggM.cur?.t ?: mc.t
                     s.stage = 2
-                    s.lvBi = -1; s.lvConfBi = -1; s.hvBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
-                    s.lvTouched = false; s.lvUsed = false
+                    s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                    s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                    s.lvTouched = false; s.lvUsed = false; s.lvReEntered = false
                     s.orderId = -1
                     addMarker(mc.bi, old, 10, "تایید میانی باطل شد")
                     lg("ENGINE", "تایید میانی باطل شد · ستاپ #${s.id}", "سطح قبلی=${f2(old)} bar=${mc.bi}")
@@ -651,20 +770,26 @@ class Engine(val cfg: Settings) {
             val bullL = s.dir == 1
 
             // هنگام معامله هم چرخهٔ یک‌بارمصرف تریگر۱ را دنبال می‌کنیم، فقط برای
-            // جلوگیری از مسلح‌مجدد اگر باکس در این فاصله مصرف شود؛ معامله را دست نمی‌زنیم.
+            // جلوگیری از مسلح‌مجدد اگر باکس در این فاصله مصرف شود یا نقض شود؛ معامله را دست نمی‌زنیم.
             if (s.stage == 7) {
                 if (s.lvBi >= 0 && !s.lvUsed) {
-                    val inside = q1.l <= s.lvH && q1.h >= s.lvL
-                    if (inside && !s.lvTouched) {
-                        s.lvTouched = true
-                    } else if (s.lvTouched) {
-                        val left = if (bullL) q1.c > s.lvH else q1.c < s.lvL
-                        if (left) {
-                            s.lvUsed = true
-                            s.rearmAllowed = false
-                            addMarker(q1.bi, if (bullL) s.lvH else s.lvL, 11, "باکس ولوم کم مصرف شد ✖")
-                            lg("ZONE", "باکس تریگر۱ هنگام معامله مصرف شد؛ مسلح‌مجدد بسته شد · ستاپ #${s.id}",
-                                "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi}")
+                    val lvViol = s.lvConfBi >= 0 && (if (bullL) q1.l < s.lvL else q1.h > s.lvH)
+                    if (lvViol) {
+                        s.lvUsed = true
+                        s.rearmAllowed = false
+                    } else {
+                        val inside = q1.l <= s.lvH && q1.h >= s.lvL
+                        if (inside && !s.lvTouched) {
+                            s.lvTouched = true
+                        } else if (s.lvTouched) {
+                            val left = if (bullL) q1.c > s.lvH else q1.c < s.lvL
+                            if (left) {
+                                s.lvUsed = true
+                                s.rearmAllowed = false
+                                addMarker(q1.bi, if (bullL) s.lvH else s.lvL, 11, "باکس ولوم کم مصرف شد ✖")
+                                lg("ZONE", "باکس تریگر۱ هنگام معامله مصرف شد؛ مسلح‌مجدد بسته شد · ستاپ #${s.id}",
+                                    "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi}")
+                            }
                         }
                     }
                 }
@@ -673,8 +798,8 @@ class Engine(val cfg: Settings) {
 
             var lvConfirmedNow = false
 
-            // ── مارک / تایید کندل ولوم کم ──
-            if (!s.lvUsed && s.stage <= 4) {
+            // ── مارک / تایید کندل ولوم کم (فقط پیش از تایید اولیهٔ باکس) ──
+            if (!s.lvUsed && s.lvConfBi < 0 && s.stage <= 4) {
                 if (s.lvBi < 0) {
                     if (prevT1Vol.isNaN() || q1.v < prevT1Vol) {
                         s.lvBi = q1.bi; s.lvH = q1.h; s.lvL = q1.l
@@ -686,7 +811,7 @@ class Engine(val cfg: Settings) {
                     val violL = if (bullL) q1.l < s.lvL else q1.h > s.lvH
                     val confL = if (bullL) q1.c > s.lvH else q1.c < s.lvL
                     if (violL) {
-                        s.lvBi = -1
+                        s.lvBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
                     } else if (confL) {
                         s.lvConfBi = curBi
                         lvConfirmedNow = true
@@ -702,6 +827,27 @@ class Engine(val cfg: Settings) {
                             "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi} مرحله=${s.stage}")
                         alarm(AlertKind.LV, "ناحیهٔ ولوم کم تایید شد",
                             "ستاپ #${s.id} · باکس ${f2(s.lvL)} تا ${f2(s.lvH)} · منتظر کندل ولوم زیاد (تریگر ۲)")
+                    }
+                }
+            }
+
+            // ── ابطال باکس ولوم کم پس از تایید (§4-7 سند نهایی) ──
+            if (!lvConfirmedNow && s.lvBi >= 0 && s.lvConfBi >= 0 && !s.lvUsed) {
+                val lvViolAfter = if (bullL) q1.l < s.lvL else q1.h > s.lvH
+                if (lvViolAfter) {
+                    if (s.stage in 4..5) {
+                        s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                        s.lvTouched = false; s.lvReEntered = false
+                        s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                        s.stage = 3
+                        s.note = "نقض ناحیهٔ ولوم کم (تریگر۱)"
+                        addMarker(q1.bi, if (bullL) q1.l else q1.h, 10, "ابطال ناحیهٔ ولوم کم")
+                        lg("ENGINE", "ناحیهٔ ولوم کم با عبور از سمت مخالف باطل شد · ستاپ #${s.id}",
+                            "bar=${q1.bi}")
+                        continue
+                    } else if (s.stage == 6) {
+                        s.lvUsed = true
+                        s.rearmAllowed = false
                     }
                 }
             }
@@ -749,6 +895,65 @@ class Engine(val cfg: Settings) {
         for (s in setups) {
             val bull = s.dir == 1
 
+            // ④ انقضا / ورود بعد از مسلح‌شدن (§4-8 و §4-9 سند نهایی):
+            //    اگر سفارش در کندل قبلی مسلح شده باشد (curBi > s.hvConfBi)، پیش از بررسی شکست
+            //    میانی/ساختار در این کندل، بررسی می‌کنیم که آیا در ابتدای کندل منقضی شده یا با
+            //    رسیدن قیمت به لبهٔ نزدیکِ HV سفارش پر شده است (چون لبهٔ ورود بالاتر از میانی/ساختار
+            //    در خرید و پایین‌تر از آن‌ها در فروش است و قیمت اول سفارش را پر می‌کند).
+            if (s.stage == 6 && curBi > s.hvConfBi) {
+                if (s.priceExpiryRef.isNaN()) {
+                    s.priceExpiryRef = if (bull) lastBEpin else lastBUpin
+                }
+                val openBreak = !s.priceExpiryRef.isNaN() &&
+                        (if (bull) open > s.priceExpiryRef else open < s.priceExpiryRef)
+                val closeBreak = priceExpiryCrossed(bull, open, close, s.priceExpiryRef)
+                val nBars = maxOf(1, cfg.tfS / maxOf(1, cfg.tf2))
+                val barExpire = s.armBi >= 0 && (curBi - s.armBi >= nBars)
+                val entryTouched = if (bull) low <= s.hvH else high >= s.hvL
+                val hvViol = if (bull) low < s.hvL else high > s.hvH
+
+                if (barExpire || openBreak || (!entryTouched && closeBreak)) {
+                    val expReason = if (barExpire) {
+                        "گذشت یک کندل ساختار کامل (${nBars} کندل تریگر۲)"
+                    } else if (bull) {
+                        "باز/کلوز از بالای pinBE هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
+                    } else {
+                        "باز/کلوز از زیر pinBU هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
+                    }
+                    s.stage = if (s.lvUsed || barExpire) 8 else 4
+                    s.note = "سفارش منقضی"
+                    events.add("[${s.id}] سفارش منقضی شد — $expReason")
+                    broker?.onSetupExpired(s, curT, curBi, expReason)
+                    s.orderId = -1
+                    s.hvBi = -1; s.runMax = volume
+                    if (s.stage == 4) s.rearmAllowed = true
+                    lg("ENGINE", "سفارش معلق منقضی شد · ستاپ #${s.id}",
+                        "reason=$expReason stage=${s.stage} bar=$curBi")
+                    if (s.stage == 8) continue
+                } else if (entryTouched) {
+                    s.entry = if (bull) s.hvH else s.hvL
+                    s.stage = 7
+                    s.entryBi = curBi   // کندل پرشدن — برای قاعده §۶-۲۱
+                    cnt.entry++
+                    lastEntryPx = s.entry; lastSlPx = s.sl; lastTpPx = s.tpx
+                    addMarker(curBi, s.entry, 8, (if (bull) "ورود خرید" else "ورود فروش") + " @ " + f2(s.entry))
+                    lg("TRADE", "قیمت به ناحیهٔ ولوم زیاد برگشت (شرط ورود) · ستاپ #${s.id}",
+                        "ورود=${f2(s.entry)} bar=$curBi")
+                } else if (hvViol) {
+                    s.hvBi = -1; s.runMax = volume
+                    s.stage = if (s.lvUsed) 8 else 4
+                    broker?.onSetupInvalidated(s, curT, curBi)
+                    s.orderId = -1
+                    if (s.stage == 4) {
+                        s.prevEntry = Double.NaN
+                        s.rearmAllowed = false
+                    }
+                    lg("ENGINE", "ناحیهٔ HV نقض شد (یک تیک از سمت دور) → سفارش لغو و اسکن از نو · ستاپ #${s.id}",
+                        "hvL=${f2(s.hvL)} hvH=${f2(s.hvH)} stage=${s.stage} bar=$curBi")
+                    if (s.stage == 8) continue
+                }
+            }
+
             // §4-6: تأیید میانی باید روی هر کندل بستهٔ تریگر۲ بررسی شود؛
             // منتظر بسته‌شدن کندل میانی نمانیم، چون یک عبور کوتاه هم تأیید را باطل می‌کند.
             if (s.stage == 7 && s.rearmAllowed && rearmInvalidatedByBar(s, cd, cfg.midInvalidClose)) {
@@ -768,8 +973,9 @@ class Engine(val cfg: Settings) {
                     s.midRef = Double.NaN; s.midBi = -1; s.markBi = -1
                     s.touchMidStart = aggM.cur?.t ?: cd.t
                     s.stage = 2
-                    s.lvBi = -1; s.lvConfBi = -1; s.hvBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
-                    s.lvTouched = false; s.lvUsed = false
+                    s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                    s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                    s.lvTouched = false; s.lvUsed = false; s.lvReEntered = false
                     s.orderId = -1
                     addMarker(curBi, old, 10, "تایید میانی باطل شد")
                     lg("ENGINE", "تایید میانی باطل شد · ستاپ #${s.id}",
@@ -810,6 +1016,26 @@ class Engine(val cfg: Settings) {
                 }
             }
 
+            // ②-ب ابطال باکس ولوم کم پس از تایید با عبور ۱ تیک از سمت مخالف (§4-7 سند نهایی)
+            if (!s.lvUsed && s.lvBi >= 0 && s.lvConfBi >= 0 && curBi > s.lvConfBi) {
+                val lvViol = if (bull) low < s.lvL else high > s.lvH
+                if (lvViol) {
+                    if (s.stage in 4..5) {
+                        s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                        s.lvTouched = false; s.lvReEntered = false
+                        s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                        s.stage = 3
+                        s.note = "نقض ناحیهٔ ولوم کم (تریگر۱)"
+                        addMarker(curBi, if (bull) low else high, 10, "ابطال ناحیهٔ ولوم کم")
+                        lg("ENGINE", "ناحیهٔ ولوم کم با عبور از سمت مخالف باطل شد · ستاپ #${s.id}",
+                            "bar=$curBi")
+                    } else if (s.stage in 6..7) {
+                        s.lvUsed = true
+                        s.rearmAllowed = false
+                    }
+                }
+            }
+
             // ③-الف بازگشت قیمت به باکس ولوم کم ← شروع اسکن ولوم زیاد
             if (s.stage == 4 && !s.zGone && s.lvBi >= 0 && !s.lvReEntered) {
                 if (low <= s.lvH && high >= s.lvL) {
@@ -823,13 +1049,14 @@ class Engine(val cfg: Settings) {
             }
 
             // ③-ب ناحیهٔ ولوم زیاد (تریگر ۲)
+            // §4-8 سند نهایی: کندل تایید ناحیه پرحجم صرفاً باید بالای سقف (خرید) یا زیر کف (فروش)
+            // کندل پرحجم بسته شود و شرط افزایش مجدد حجم روی کندل تایید وجود ندارد.
             if (s.stage in 4..5 && s.lvBi >= 0 && s.lvReEntered) {
                 val scanOK = if (s.hvScanBi < 0) true else curBi >= s.hvScanBi
                 if (scanOK) {
                     val marked = s.hvBi >= 0
                     val viol = marked && (if (bull) low < s.hvL else high > s.hvH)
-                    val conf = marked && volume > prevChartVol &&
-                            (if (bull) close > s.hvH else close < s.hvL)
+                    val conf = marked && (if (bull) close > s.hvH else close < s.hvL)
                     if (viol) {
                         s.hvBi = -1; s.runMax = volume; s.stage = 4
                         lg("ENGINE", "کندل ولوم زیاد نقض شد → جست‌وجوی کندل جدید · ستاپ #${s.id}",
@@ -850,82 +1077,6 @@ class Engine(val cfg: Settings) {
                                 "vol=${f2(volume)} hi=${f2(high)} lo=${f2(low)} bar=$curBi مرحله=5")
                         }
                     }
-                }
-            }
-
-            // ④-۰ انقضای سفارش معلق (§4-8 سند نهایی):
-            //    الف) قیمت (باز یا کلوز) از آخرین pinBE هنگام مسلح‌شدن (خرید) /
-            //       آخرین pinBU هنگام مسلح‌شدن (فروش) عبور کند.
-            //    ب) گذشت یک کندل ساختار کامل بعد از مسلح‌شدن (n کندل تریگر۲).
-            if (s.stage == 6 && curBi > s.hvConfBi) {
-                var expired = false; var expReason = ""
-                // برای فایل‌های ذخیرهٔ قدیمی، اگر snapshot هنوز ثبت نشده باشد از آخرین پین جاری پر می‌شود.
-                if (s.priceExpiryRef.isNaN()) {
-                    s.priceExpiryRef = if (bull) lastBEpin else lastBUpin
-                }
-                if (priceExpiryCrossed(bull, open, close, s.priceExpiryRef)) {
-                    expired = true
-                    expReason = if (bull) "باز/کلوز از بالای pinBE هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
-                                else "باز/کلوز از زیر pinBU هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
-                }
-                // گذشت n کندل تریگر۲ (تقریباً یک کندل ساختار کامل)؛ اگر هم‌زمان
-                // شرط قیمتی رخ دهد، مهلت ساختاری اولویت دارد و مسلح مجدد مجاز نیست.
-                if (s.armBi >= 0) {
-                    val nBars = maxOf(1, cfg.tfS / maxOf(1, cfg.tf2))
-                    if (curBi - s.armBi >= nBars) {
-                        expired = true
-                        expReason = "گذشت یک کندل ساختار کامل (${nBars} کندل تریگر۲)"
-                    }
-                }
-                if (expired) {
-                    // انقضا (قیمت یا زمان): سفارش لغو می‌شود. مسلح مجدد فقط
-                    // وقتی مجاز است که باکس LV هنوز مصرف نشده و کندل ساختار
-                    // جدید نگذشته باشد (در armSetup سنجیده می‌شود).
-                    s.stage = if (s.lvUsed || expReason.contains("کندل ساختار")) 8 else 4
-                    s.note = "سفارش منقضی"
-                    events.add("[${s.id}] سفارش منقضی شد — $expReason")
-                    broker?.onSetupExpired(s, curT, curBi, expReason)
-                    s.orderId = -1
-                    s.hvBi = -1; s.runMax = volume
-                    // انقضای قیمتی اجازهٔ مسلح مجدد می‌دهد؛ همان یک برگشت LV مصرف می‌شود.
-                    // انقضای زمانی ستاپ را به مرحلهٔ ۸ برده و دیگر مسلح نمی‌کند.
-                    if (s.stage == 4) s.rearmAllowed = true
-                    lg("ENGINE", "سفارش معلق منقضی شد · ستاپ #${s.id}",
-                        "reason=$expReason stage=${s.stage} bar=$curBi")
-                    continue
-                }
-            }
-
-            // ④ ورود : برگشت به ناحیهٔ ولوم زیاد (پر شدن سفارش لیمیت)
-            // §4-8 سند نهایی: نقض ناحیه HV بعد از مسلح با **یک تیک عبور** از
-            // سمت دور (wick کافی است)، نه فقط کلوز.
-            if (s.stage == 6 && curBi > s.hvConfBi) {
-                val hvViol = if (bull) low < s.hvL else high > s.hvH
-                val entryTouched = if (bull) low <= s.hvH else high >= s.hvL
-                // مسیر قیمت به ورود (لبهٔ نزدیک) می‌رسد پیش از لبهٔ دورِ نقض؛
-                // پس اگر هر دو در یک کندل باشند، اول سفارش پر می‌شود.
-                if (entryTouched) {
-                    s.entry = if (bull) s.hvH else s.hvL
-                    s.stage = 7
-                    s.entryBi = curBi   // کندل پرشدن — برای قاعده §۶-۲۱
-                    cnt.entry++
-                    lastEntryPx = s.entry; lastSlPx = s.sl; lastTpPx = s.tpx
-                    addMarker(curBi, s.entry, 8, (if (bull) "ورود خرید" else "ورود فروش") + " @ " + f2(s.entry))
-                    lg("TRADE", "قیمت به ناحیهٔ ولوم زیاد برگشت (شرط ورود) · ستاپ #${s.id}",
-                        "ورود=${f2(s.entry)} bar=$curBi")
-                } else if (hvViol) {
-                    // اگر ورود رخ نداد، نقض HV فقط اسکن HV را از نو آغاز می‌کند؛
-                    // همان برگشت اول LV معتبر می‌ماند و قاعدهٔ «ورود بهتر» اعمال نمی‌شود.
-                    s.hvBi = -1; s.runMax = volume
-                    s.stage = if (s.lvUsed) 8 else 4
-                    broker?.onSetupInvalidated(s, curT, curBi)
-                    s.orderId = -1
-                    if (s.stage == 4) {
-                        s.prevEntry = Double.NaN
-                        s.rearmAllowed = false
-                    }
-                    lg("ENGINE", "ناحیهٔ HV نقض شد (یک تیک از سمت دور) → سفارش لغو و اسکن از نو · ستاپ #${s.id}",
-                        "hvL=${f2(s.hvL)} hvH=${f2(s.hvH)} stage=${s.stage} bar=$curBi")
                 }
             }
 
@@ -1052,8 +1203,16 @@ class Engine(val cfg: Settings) {
                 return
             }
         }
-        //  ⚠ فقط اگر کارگزار واقعاً سفارش را ثبت کرد به stage=6 می‌رویم.
-        val registered = broker?.registerLimit(s, cd) == true
+        // §4-8 و §10 سند نهایی: ما فقط مجاز به گذاشتن ۱ سفارش در چارت هستیم (حداکثر ۱ سفارش معلق یا ۱ معامله باز).
+        val hasActiveSetupOrder = setups.any { it.id != s.id && (it.stage == 6 || it.stage == 7) }
+        if (hasActiveSetupOrder) {
+            s.hvBi = -1; s.runMax = Double.NaN
+            lg("ENGINE", "مسلح‌شدن ستاپ #${s.id} رد شد — سفارش یا معاملهٔ فعال دیگری در چارت وجود دارد",
+                "bar=$curBi")
+            return
+        }
+        //  ⚠ فقط اگر کارگزار واقعاً سفارش را ثبت کرد (یا در حالت بدون کارگزار) به stage=6 می‌رویم.
+        val registered = broker?.registerLimit(s, cd) ?: true
         if (!registered) {
             s.hvBi = -1; s.runMax = Double.NaN
             lg("ENGINE", "ثبت سفارش برای ستاپ #${s.id} رد شد (${broker?.lastError}) — کندل HV ریست شد",
@@ -1105,35 +1264,25 @@ class Engine(val cfg: Settings) {
     }
 
     /**
-     * انتخاب کندل مهم در «پایین‌ترین‌ها» — **مطابق §۲-۱ سند استراتژی**.
+     * انتخاب کندل مهم در «پایین‌ترین‌ها» و «بالاترین‌ها» — **مطابق §4-1 سند نهایی استراتژی**.
      *
-     * سند: «از این دو، کندلی که **کف بزرگ‌تری** دارد مهم است (در تساوی کف، کندلی که
-     * سقف کوچک‌تری دارد).»
-     *
-     * ⚠ پیش‌تر `a.l < b.l` بود یعنی **کم‌ترین** کف انتخاب می‌شد که با قاعدهٔ سند
-     * نمی‌خواند. در ۱٫۳٫۷ به `a.l > b.l` اصلاح شد. شکستن تساوی (سقف کوچک‌تر) بدون
-     * تغییر ماند چون از ابتدا مطابق سند بود.
-     *
-     * `pickHigh` دست نخورد: «سقف بزرگ‌تر» از ابتدا درست پیاده شده بود.
+     * پایین‌ترین‌ها: کمترین کف (`min(low(a, b))`)؛ در صورت تساوی کف، کمترین سقف (`min(high(a, b))`).
+     * بالاترین‌ها: بیشترین سقف (`max(high(a, b))`)؛ در صورت تساوی سقف، کمترین کف (`min(low(a, b))`).
      */
     internal fun pickLow(a: Candle, b: Candle): Triple<Double, Double, Int> =
-        if (a.l > b.l || (a.l == b.l && a.h < b.h)) Triple(a.h, a.l, a.bi) else Triple(b.h, b.l, b.bi)
+        if (a.l < b.l || (a.l == b.l && a.h < b.h)) Triple(a.h, a.l, a.bi) else Triple(b.h, b.l, b.bi)
 
     internal fun pickHigh(a: Candle, b: Candle): Triple<Double, Double, Int> =
-        if (a.h > b.h || (a.h == b.h && a.l > b.l)) Triple(a.h, a.l, a.bi) else Triple(b.h, b.l, b.bi)
+        if (a.h > b.h || (a.h == b.h && a.l < b.l)) Triple(a.h, a.l, a.bi) else Triple(b.h, b.l, b.bi)
 
     /**
-     * پاک‌کردن کامل pinBU بعد از ابطال/شکست بدون توالی (§4-3، ۴-۴ سند نهایی).
-     * سطوح pinBU کامل ریست می‌شوند؛ HL=NaN (روند صعودی بدون pinBU دیگر HL
-     * ندارد و منتظر pinBU جدید می‌ماند). lowestBUpin (لنگر فیبو و مرجع) نگه
-     * داشته می‌شود — این کمترین کف BU نیست، بلکه مرجع توالی است.
+     * پاک‌کردن کامل pinBU بعد از ابطال/شکست بدون توالی (§4-1 سند نهایی).
      */
     private fun clearBUpin() {
         buActive = false
         lastBUpin = Double.NaN
         lastBUpinRef = Double.NaN
         lastBUpinHi = Double.NaN
-        if (trend == 1) HL = Double.NaN
     }
 
     /** قرینهٔ کامل برای pinBE. */
@@ -1142,7 +1291,6 @@ class Engine(val cfg: Settings) {
         lastBEpin = Double.NaN
         lastBEpinRef = Double.NaN
         lastBEpinLo = Double.NaN
-        if (trend == -1) LH = Double.NaN
     }
 
     private fun cancelDir(dir: Int) {

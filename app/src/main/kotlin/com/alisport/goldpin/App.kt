@@ -32,6 +32,10 @@ class AppState {
     var candles: List<Candle> = emptyList()
         private set
 
+    /** کش آخرین سری ریزدانه (۱ دقیقه) برای تجمیع آفلاین هنگام بازگشت از تایم‌فریم‌های بالاتر به پایین‌تر */
+    @Volatile
+    private var fineCandles: List<Candle> = emptyList()
+
     // تنظیمات فید (اپ)
     var symbol: String = Feed.SYMBOL_DEFAULT
     var baseTfSec: Int = Tf.M1
@@ -157,7 +161,7 @@ class AppState {
     /** راه‌اندازی لاگر و هشدارها + وصل کردن آن‌ها به موتور و کارگزار */
     fun initApp(ctx: Context) {
         appCtx = ctx.applicationContext
-        Log.init(appCtx!!, "1.4.0")
+        Log.init(appCtx!!, "1.4.11")
         Alerts.init(appCtx!!)
         val p = appCtx!!.getSharedPreferences("goldpin", Context.MODE_PRIVATE)
         // مهاجرت ۱٫۱ → ۱٫۲: تمام‌صفحهٔ خودکار دیگر پیش‌فرض نیست؛ تنظیم قدیمی true را یک‌بار خاموش کن.
@@ -272,22 +276,73 @@ class AppState {
         }
     }
 
+    private fun aggregateBestAvailable(targetTfSec: Int): List<Candle> {
+        val curStep = medianStepSec(candles)
+        val fineStep = medianStepSec(fineCandles)
+        val src = when {
+            candles.isNotEmpty() && curStep in 1L..targetTfSec.toLong() -> candles
+            fineCandles.isNotEmpty() && fineStep in 1L..targetTfSec.toLong() -> fineCandles
+            candles.isNotEmpty() -> candles
+            else -> fineCandles
+        }
+        if (src.isEmpty()) return emptyList()
+        val srcStep = medianStepSec(src)
+        val agg = if (sameTimeframe(srcStep, targetTfSec.toLong())) src else Feed.aggregate(src, targetTfSec)
+        return if (useSyntheticVolume) Feed.synthesizeVolumeIfMissing(agg) else agg
+    }
+
+    private fun syncHierarchyForChartTf(newTf: Int) {
+        cfg.tf2 = newTf
+        if (cfg.tfMode == 5) return
+        val preset = TF_MODES.firstOrNull { !it.custom && it.t2 == newTf }
+        if (preset != null) {
+            cfg.tfMode = preset.idx
+            cfg.tfS = preset.s; cfg.tfM = preset.m; cfg.tf1 = preset.t1; cfg.tf2 = preset.t2
+            return
+        }
+        when {
+            newTf <= Tf.M30 -> { cfg.tf1 = Tf.H1; cfg.tfM = Tf.H4; cfg.tfS = Tf.D1 }
+            newTf <= Tf.H4  -> { cfg.tf1 = Tf.D1; cfg.tfM = Tf.W1; cfg.tfS = Tf.W1 * 4 }
+            newTf <= Tf.D1  -> { cfg.tf1 = Tf.W1; cfg.tfM = Tf.W1 * 4; cfg.tfS = Tf.W1 * 12 }
+            else            -> { cfg.tf1 = Tf.W1 * 4; cfg.tfM = Tf.W1 * 12; cfg.tfS = Tf.W1 * 52 }
+        }
+    }
+
+    private fun fetchChartHistoryBlocking(targetTfSec: Int): Pair<List<Candle>, Int> {
+        var base = Feed.baseTfFor(targetTfSec)
+        val (interval, range) = Feed.yahooSpec(base, depth)
+        var raw = Feed.yahooChart(symbol, interval, range)
+        if (raw.size < 30 && base != Tf.M1 && targetTfSec < Tf.H1) {
+            try {
+                val r1m = Feed.yahooChart(symbol, "1m", "7d")
+                if (r1m.size > raw.size) {
+                    raw = r1m
+                    base = Tf.M1
+                }
+            } catch (_: Exception) { }
+        }
+        var chart = if (base == targetTfSec) raw else Feed.aggregate(raw, targetTfSec)
+        if (useSyntheticVolume) chart = Feed.synthesizeVolumeIfMissing(chart)
+        return chart to base
+    }
+
     fun setMode(modeIdx: Int) {
         Log.i(Log.CAT_CFG, "تغییر مود تایم‌فریمی", "مود=$modeIdx")
         val m = TF_MODES.firstOrNull { it.idx == modeIdx } ?: TF_MODES[0]
         busy = true
         busyText = "در حال تغییر مود تایم‌فریمی…"
         notifyUi()
+        cfg.tfMode = m.idx
+        val tfChanged = !m.custom && chartTfSec != m.t2
+        if (!m.custom) {
+            cfg.tfS = m.s; cfg.tfM = m.m; cfg.tf1 = m.t1; cfg.tf2 = m.t2
+            chartTfSec = m.t2
+        }
         io.execute {
             try {
-                cfg.tfMode = m.idx
-                if (!m.custom) { cfg.tfS = m.s; cfg.tfM = m.m; cfg.tf1 = m.t1; cfg.tf2 = m.t2 }
-                if (chartTfSec != cfg.tf2) {
-                    chartTfSec = cfg.tf2
-                    val res = Feed.aggregate(candles, chartTfSec).let {
-                        if (useSyntheticVolume) Feed.synthesizeVolumeIfMissing(it) else it
-                    }
-                    setCandles(res, rebuildNow = false)
+                if (tfChanged || !sameTimeframe(medianStepSec(candles), chartTfSec.toLong())) {
+                    val local = aggregateBestAvailable(chartTfSec)
+                    if (local.isNotEmpty()) setCandles(local, rebuildNow = false)
                 }
                 rebuild()
             } catch (e: Throwable) {
@@ -299,13 +354,21 @@ class AppState {
                 notifyUi()
             }
         }
+        if (!m.custom && (tfChanged || !sameTimeframe(medianStepSec(candles), chartTfSec.toLong()))) {
+            changeChartTf(chartTfSec, forceDownload = true)
+        }
     }
 
     fun setCandles(list: List<Candle>, rebuildNow: Boolean = true) {
         Log.i(Log.CAT_FEED, "داده در اپ گذاشته شد", "کندل=${list.size}")
         busy = true
         try {
-            candles = ArrayList(list)          // تعویض اتمیک
+            val copy = ArrayList(list)
+            val step = medianStepSec(copy)
+            if (copy.isNotEmpty() && (fineCandles.isEmpty() || (step in 1L..90L && copy.size >= fineCandles.size))) {
+                fineCandles = copy
+            }
+            candles = copy                     // تعویض اتمیک
             if (rebuildNow) rebuild()
         } finally {
             busy = false
@@ -316,36 +379,33 @@ class AppState {
     // ── دانلود تاریخچه از فید ───────────────────────────────────────────────────
     fun downloadHistory(onDone: (String) -> Unit = {}) {
         val t0 = System.currentTimeMillis()
+        val targetTf = chartTfSec
         busy = true
-        busyText = "در حال دانلود تاریخچهٔ طلا…"
+        busyText = "در حال دانلود تاریخچهٔ طلا (${com.alisport.goldpin.core.Tf.label(targetTf)})…"
         lastFeedError = null
         notifyUi()
-        Log.i(Log.CAT_FEED, "شروع دانلود تاریخچه", "نماد=$symbol چارت=${com.alisport.goldpin.core.Tf.label(chartTfSec)} عمق=$depth")
-        io.execute {
+        Log.i(Log.CAT_FEED, "شروع دانلود تاریخچه", "نماد=$symbol چارت=${com.alisport.goldpin.core.Tf.label(targetTf)} عمق=$depth")
+        net.execute {
             try {
-                val base = Feed.baseTfFor(chartTfSec)
-                baseTfSec = base
-                val (interval, range) = Feed.yahooSpec(base, depth)
-                var raw = Feed.yahooChart(symbol, interval, range)
-                if (raw.size < 50) {
-                    // تلاش دوباره با بازهٔ بزرگ‌تر
-                    raw = Feed.yahooChart(symbol, "1m", "7d")
-                }
-                var chart = if (base == chartTfSec) raw else Feed.aggregate(raw, chartTfSec)
-                if (useSyntheticVolume) chart = Feed.synthesizeVolumeIfMissing(chart)
+                val (chart, base) = fetchChartHistoryBlocking(targetTf)
                 val n = chart.size
                 Log.i(Log.CAT_FEED, "دانلود تاریخچه موفق",
-                    "کندل=$n مدت=${System.currentTimeMillis() - t0}ms پایه=${com.alisport.goldpin.core.Tf.label(base)} بازه=$range")
-                // اجرای موتور روی همین نخ پس‌زمینه انجام می‌شود (رابط کاربری فریز نمی‌کند)
-                busyText = "در حال محاسبهٔ موتور روی ${com.alisport.goldpin.util.Fa.d(n.toString())} کندل…"
-                setCandles(chart)
-                main.post {
-                    lastFeedAt = System.currentTimeMillis()
-                    lastFeedError = null
-                    busy = false
-                    busyText = ""
-                    notifyUi()
-                    onDone("دانلود شد: ${com.alisport.goldpin.util.Fa.d(n.toString())} کندل (${com.alisport.goldpin.core.Tf.label(chartTfSec)})")
+                    "کندل=$n مدت=${System.currentTimeMillis() - t0}ms پایه=${com.alisport.goldpin.core.Tf.label(base)} چارت=${com.alisport.goldpin.core.Tf.label(targetTf)}")
+                io.execute {
+                    try {
+                        baseTfSec = base
+                        busyText = "در حال محاسبهٔ موتور روی ${com.alisport.goldpin.util.Fa.d(n.toString())} کندل…"
+                        setCandles(chart)
+                    } finally {
+                        main.post {
+                            lastFeedAt = System.currentTimeMillis()
+                            lastFeedError = null
+                            busy = false
+                            busyText = ""
+                            notifyUi()
+                            onDone("دانلود شد: ${com.alisport.goldpin.util.Fa.d(n.toString())} کندل (${com.alisport.goldpin.core.Tf.label(targetTf)})")
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 val msg = e.message ?: "خطای نامشخص"
@@ -355,7 +415,7 @@ class AppState {
                     busy = false
                     busyText = ""
                     notifyUi()
-                    onDone("خطای دانلود: $msg")
+                    onDone("خطای دانلود: ${com.alisport.goldpin.util.Fa.short(msg, 160)}")
                 }
             }
         }
@@ -525,25 +585,51 @@ class AppState {
         Log.d(Log.CAT_LIVE, "ادغام دنبالهٔ داده", "قبل=$before بعد=${candles.size} جدید=${candles.size - before}")
     }
 
-    /** تغییر تایم‌فریم چارت بدون دانلود مجدد (تجمیع داخلی) */
-    fun changeChartTf(newTf: Int) {
-        if (newTf == chartTfSec) return
+    /** تغییر تایم‌فریم چارت (همراه با دانلود تاریخچهٔ مناسب و پشتیبان تجمیع داخلی) */
+    fun changeChartTf(newTf: Int, forceDownload: Boolean = false) {
+        val stepMatches = sameTimeframe(medianStepSec(candles), newTf.toLong()) && candles.size >= 30
+        if (!forceDownload && newTf == chartTfSec && stepMatches) return
         Log.i(Log.CAT_CFG, "تغییر تایم‌فریم چارت", "${com.alisport.goldpin.core.Tf.label(chartTfSec)} → ${com.alisport.goldpin.core.Tf.label(newTf)}")
         chartTfSec = newTf
-        cfg.tf2 = newTf
-        io.execute {
-            val base = Feed.baseTfFor(newTf)
+        syncHierarchyForChartTf(newTf)
+        busy = true
+        busyText = "در حال دریافت تاریخچهٔ ${com.alisport.goldpin.core.Tf.label(newTf)}…"
+        lastFeedError = null
+        notifyUi()
+        net.execute {
             try {
-                val (interval, range) = Feed.yahooSpec(base, depth)
-                var raw = Feed.yahooChart(symbol, interval, range)
-                var chart = if (base == newTf) raw else Feed.aggregate(raw, newTf)
-                if (useSyntheticVolume) chart = Feed.synthesizeVolumeIfMissing(chart)
-                setCandles(chart)
+                val (chart, base) = fetchChartHistoryBlocking(newTf)
+                io.execute {
+                    try {
+                        baseTfSec = base
+                        setCandles(chart)
+                    } finally {
+                        main.post {
+                            lastFeedAt = System.currentTimeMillis()
+                            lastFeedError = null
+                            busy = false
+                            busyText = ""
+                            notifyUi()
+                        }
+                    }
+                }
             } catch (e: Exception) {
-                // بدون شبکه: از دادهٔ موجود تجمیع می‌کنیم
-                val chart = Feed.aggregate(candles, newTf)
-                lastFeedError = "تجمیع داخلی از دادهٔ موجود: ${e.message}"
-                setCandles(chart)
+                // بدون شبکه: از بهترین دادهٔ ریزدانهٔ موجود تجمیع می‌کنیم
+                io.execute {
+                    try {
+                        val chart = aggregateBestAvailable(newTf)
+                        setCandles(chart)
+                    } finally {
+                        main.post {
+                            lastFeedError = com.alisport.goldpin.util.Fa.short(
+                                "تجمیع داخلی از دادهٔ موجود: ${e.message}", 160
+                            )
+                            busy = false
+                            busyText = ""
+                            notifyUi()
+                        }
+                    }
+                }
             }
         }
     }
@@ -730,8 +816,9 @@ class AppState {
     private fun loadSampleBlocking(ctx: Context): Int {
         val n = Feed.openSampleAsset(ctx).use { ins ->
             val text = Feed.readCsvStream(ins)
-            var list = Feed.parseCsv(text)
-            list = Feed.aggregate(list, chartTfSec)
+            val raw = Feed.parseCsv(text)
+            fineCandles = ArrayList(raw)
+            val list = if (chartTfSec <= Tf.M1) raw else Feed.aggregate(raw, chartTfSec)
             Log.i(Log.CAT_FEED, "دادهٔ نمونهٔ داخلی بارگذاری شد", "کندل=${list.size}")
             setCandles(list)
             list.size

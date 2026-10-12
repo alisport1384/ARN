@@ -53,9 +53,21 @@ object Feed {
         conn.instanceFollowRedirects = true
         conn.setRequestProperty("User-Agent", userAgent)
         conn.setRequestProperty("Accept", "application/json,text/csv,*/*")
+        conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+        if (urlStr.contains("yahoo.com")) {
+            conn.setRequestProperty("Referer", "https://finance.yahoo.com/")
+        }
         try {
             val code = conn.responseCode
-            if (code !in 200..299) throw FeedException("HTTP $code از $urlStr")
+            if (code !in 200..299) {
+                val errBody = try {
+                    conn.errorStream?.let { es ->
+                        BufferedReader(InputStreamReader(es, Charsets.UTF_8)).use { it.readText() }
+                    } ?: ""
+                } catch (_: Exception) { "" }
+                val detail = if (errBody.isNotBlank()) " (${Fa.short(errBody, 120)})" else ""
+                throw FeedException("HTTP $code از $urlStr$detail")
+            }
             val gz = conn.contentEncoding?.contains("gzip", true) == true
             val raw = conn.inputStream
             val ins = if (gz) GZIPInputStream(raw) else raw
@@ -65,34 +77,74 @@ object Feed {
         }
     }
 
-    private const val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
+    // ⚠ سرور Edge یاهو User-Agent مرورگر موبایل اندروید (Chrome Mobile) را با HTTP 429
+    // رد می‌کند؛ User-Agent دسکتاپ بدون محدودیت پاسخ ۲۰۰ می‌گیرد.
+    private const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    private val YAHOO_UAS = listOf(
+        UA,
+        "Mozilla/5.0",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"
+    )
+
+    /** بازه‌های مجاز جایگزین در Yahoo برای هر interval (جلوگیری از HTTP 422 و افت دقت max به ماهانه). */
+    internal fun yahooCandidateRanges(interval: String, preferredRange: String): List<String> {
+        val normPref = when {
+            // در Yahoo، بازهٔ 3mo برای تایم‌فریم‌های زیر یک ساعت خطای HTTP 422 می‌دهد (سقف ۶۰ روز).
+            interval in setOf("5m", "15m", "30m") && preferredRange in setOf("3mo", "6mo", "1y", "2y", "max") -> "60d"
+            // در Yahoo، سقف 1h/60m دقیقاً ۷۳۰ روز است؛ 2y در سال کبیسه ۷۳۱ روز می‌شود و HTTP 422 می‌دهد.
+            interval in setOf("1h", "60m") && preferredRange in setOf("2y", "5y", "10y", "max") -> "730d"
+            // در Yahoo، range=max روی 1d و 1wk دقت داده را به 1mo (ماهانه) تقلیل می‌دهد.
+            interval in setOf("1d", "1wk") && preferredRange == "max" -> "10y"
+            else -> preferredRange
+        }
+        val fallbacks = when (interval) {
+            "1m" -> listOf(normPref, "7d", "5d", "1d")
+            "2m", "5m", "15m", "30m", "90m" -> listOf(normPref, "60d", "59d", "1mo", "7d", "5d")
+            "60m", "1h" -> listOf(normPref, "730d", "720d", "1y", "6mo", "3mo", "1mo")
+            "1d" -> listOf(normPref, "10y", "5y", "2y", "1y", "6mo")
+            "1wk" -> listOf(normPref, "10y", "5y", "2y", "1y")
+            else -> listOf(normPref)
+        }
+        return fallbacks.distinct()
+    }
 
     // ── Yahoo Finance ──────────────────────────────────────────────────────────
     /**
-     * کندل‌های تاریخی از Yahoo.
-     * interval: 1m,5m,15m,30m,1h,1d — range: 1d,5d,7d,1mo,3mo,6mo,1y,2y,max
+     * کندل‌های تاریخی از Yahoo با بازه‌های پشتیبان و منبع جایگزین بدون کلید.
+     * interval: 1m,5m,15m,30m,1h,1d,1wk — range: 1d,5d,7d,1mo,60d,3mo,6mo,1y,730d,5y,10y
      */
     fun yahooChart(symbol: String, interval: String, range: String): List<Candle> {
         val t0 = System.currentTimeMillis()
-        Log.i(Log.CAT_FEED, "درخواست داده از Yahoo", "symbol=$symbol interval=$interval range=$range")
+        val ranges = yahooCandidateRanges(interval, range)
+        Log.i(Log.CAT_FEED, "درخواست داده از Yahoo", "symbol=$symbol interval=$interval range=$range candidates=$ranges")
         val hosts = listOf("query1.finance.yahoo.com", "query2.finance.yahoo.com")
         var lastErr: Exception? = null
-        for (h in hosts) {
-            try {
-                val url = "https://$h/v8/finance/chart/$symbol?interval=$interval&range=$range&includePrePost=false"
-                val body = get(url)
-                val list = parseYahoo(body)
-                if (list.isNotEmpty()) {
-                    Log.i(Log.CAT_FEED, "پاسخ Yahoo دریافت شد",
-                        "host=$h کندل=${list.size} مدت=${System.currentTimeMillis() - t0}ms حجم‌دار=${list.any { it.v > 0 }}")
-                    return list
+        for (r in ranges) {
+            for ((idx, h) in hosts.withIndex()) {
+                val ua = YAHOO_UAS[idx % YAHOO_UAS.size]
+                try {
+                    val url = "https://$h/v8/finance/chart/$symbol?interval=$interval&range=$r&includePrePost=false"
+                    val body = get(url, userAgent = ua)
+                    val list = parseYahoo(body, expectedInterval = interval)
+                    if (list.isNotEmpty()) {
+                        Log.i(Log.CAT_FEED, "پاسخ Yahoo دریافت شد",
+                            "host=$h interval=$interval range=$r کندل=${list.size} مدت=${System.currentTimeMillis() - t0}ms حجم‌دار=${list.any { it.v > 0 }}")
+                        return list
+                    }
+                    Log.w(Log.CAT_FEED, "پاسخ Yahoo خالی بود", "host=$h interval=$interval range=$r")
+                } catch (e: Exception) {
+                    Log.w(Log.CAT_FEED, "خطای درخواست Yahoo",
+                        "host=$h range=$r · " + Fa.short(e.message, 200) + " · طول‌پیام=${e.message?.length ?: 0}")
+                    lastErr = e
                 }
-                Log.w(Log.CAT_FEED, "پاسخ Yahoo خالی بود", "host=$h")
-            } catch (e: Exception) {
-                Log.w(Log.CAT_FEED, "خطای درخواست Yahoo",
-                    "host=$h · " + Fa.short(e.message, 200) + " · طول‌پیام=${e.message?.length ?: 0}")
-                lastErr = e
             }
+        }
+        // پشتیبان دوم (بدون کلید): اگر یاهو در شبکهٔ کاربر مسدود یا با محدودیت مواجه شد، از فید عمومی طلا (PAXG) می‌گیریم
+        val alt = fallbackGoldCandles(symbol, interval)
+        if (alt.isNotEmpty()) {
+            Log.i(Log.CAT_FEED, "تاریخچه از منبع پشتیبان دریافت شد",
+                "interval=$interval کندل=${alt.size} مدت=${System.currentTimeMillis() - t0}ms")
+            return alt
         }
         throw FeedException("دریافت داده از Yahoo ناموفق بود: " +
             Fa.short(lastErr?.message ?: "خالی", 200))
@@ -102,13 +154,17 @@ object Feed {
      * `internal` (نه `private`) تا آزمون واحد بتواند شکل واقعی پاسخ Yahoo را
      * بدون شبکه بررسی کند — همان مسیری که باعث فریز اپ شده بود.
      */
-    internal fun parseYahoo(body: String): List<Candle> {
+    internal fun parseYahoo(body: String, expectedInterval: String? = null): List<Candle> {
         val root = JSONObject(body)
         val chart = root.optJSONObject("chart") ?: throw FeedException("پاسخ نامعتبر: بدون «chart»")
         if (chart.optString("result", "null") == "null")
             throw FeedException("نتیجه خالی (${Fa.short(chart.optString("error"), 120)})")
         val res = chart.optJSONArray("result")?.optJSONObject(0)
             ?: throw FeedException("پاسخ بدون «result»")
+        val gran = res.optJSONObject("meta")?.optString("dataGranularity", "") ?: ""
+        if (expectedInterval != null && expectedInterval != "1mo" && gran == "1mo") {
+            throw FeedException("دقت دادهٔ برگشتی ماهانه (1mo) است نه $expectedInterval")
+        }
         val ts = res.optJSONArray("timestamp")
             ?: throw FeedException("پاسخ بدون «timestamp»")
         // ⚠ در پاسخ /v8/finance/chart کلید «indicators» یک **JSONObject** است نه
@@ -137,6 +193,81 @@ object Feed {
             out.add(Candle(bi++, ts.getLong(i) * 1000L, ov, hv, lv, cv, if (vv.isNaN()) 0.0 else vv))
         }
         return out
+    }
+
+    /** منبع پشتیبان کندل تاریخی طلا (بدون کلید API) در صورت مسدودی یا خطای یاهو */
+    internal fun fallbackGoldCandles(symbol: String, interval: String): List<Candle> {
+        val symUp = symbol.uppercase()
+        if (!symUp.contains("GC") && !symUp.contains("XAU") && !symUp.contains("PAXG") && !symUp.contains("GOLD")) {
+            return emptyList()
+        }
+        val binInterval = when (interval) {
+            "1m" -> "1m"
+            "2m", "3m" -> "3m"
+            "5m" -> "5m"
+            "15m" -> "15m"
+            "30m" -> "30m"
+            "60m", "1h" -> "1h"
+            "4h" -> "4h"
+            "1d" -> "1d"
+            "1wk" -> "1w"
+            else -> "1h"
+        }
+        try {
+            val url = "https://data-api.binance.vision/api/v3/klines?symbol=PAXGUSDT&interval=$binInterval&limit=1000"
+            val body = get(url)
+            val arr = org.json.JSONArray(body)
+            val out = ArrayList<Candle>(arr.length())
+            var bi = 0
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONArray(i) ?: continue
+                val t = row.optLong(0, -1L)
+                val ov = row.optString(1).toDoubleOrNull() ?: continue
+                val hv = row.optString(2).toDoubleOrNull() ?: continue
+                val lv = row.optString(3).toDoubleOrNull() ?: continue
+                val cv = row.optString(4).toDoubleOrNull() ?: continue
+                val vv = row.optString(5).toDoubleOrNull() ?: 0.0
+                if (t > 0L) out.add(Candle(bi++, t, ov, hv, lv, cv, vv))
+            }
+            if (out.isNotEmpty()) return out
+        } catch (e: Exception) {
+            Log.w(Log.CAT_FEED, "پشتیبان Binance Vision پاسخ نداد", Fa.short(e.message, 140))
+        }
+        try {
+            val krakenInt = when (interval) {
+                "1m" -> 1
+                "5m" -> 5
+                "15m" -> 15
+                "30m" -> 30
+                "60m", "1h" -> 60
+                "4h" -> 240
+                "1d" -> 1440
+                "1wk" -> 10080
+                else -> 60
+            }
+            val url = "https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval=$krakenInt"
+            val body = get(url)
+            val res = JSONObject(body).optJSONObject("result")
+            val arr = res?.optJSONArray("PAXGUSD")
+            if (arr != null) {
+                val out = ArrayList<Candle>(arr.length())
+                var bi = 0
+                for (i in 0 until arr.length()) {
+                    val row = arr.optJSONArray(i) ?: continue
+                    val tSec = row.optLong(0, -1L)
+                    val ov = row.optString(1).toDoubleOrNull() ?: continue
+                    val hv = row.optString(2).toDoubleOrNull() ?: continue
+                    val lv = row.optString(3).toDoubleOrNull() ?: continue
+                    val cv = row.optString(4).toDoubleOrNull() ?: continue
+                    val vv = row.optString(6).toDoubleOrNull() ?: 0.0
+                    if (tSec > 0L) out.add(Candle(bi++, tSec * 1000L, ov, hv, lv, cv, vv))
+                }
+                if (out.isNotEmpty()) return out
+            }
+        } catch (e: Exception) {
+            Log.w(Log.CAT_FEED, "پشتیبان Kraken پاسخ نداد", Fa.short(e.message, 140))
+        }
+        return emptyList()
     }
 
     /** آخرین قیمت (چند ثانیه تأخیر) */
@@ -212,38 +343,52 @@ object Feed {
     }
 
     // ── انتخاب بازه بر اساس تایم‌فریم چارت ─────────────────────────────────────
-    /** (interval, range) مناسب Yahoo برای رسیدن به تایم‌فریم چارت */
+    /**
+     * (interval, range) مناسب Yahoo برای رسیدن به تایم‌فریم چارت.
+     *
+     * محدودیت‌های واقعی سرور `/v8/finance/chart` یاهو:
+     *  • `1m`: حداکثر ۷ روز (`7d`)
+     *  • `5m`, `15m`, `30m`: حداکثر ۶۰ روز (`60d`) — ارسال `3mo` خطای HTTP 422 می‌دهد!
+     *  • `1h`: حداکثر ۷۳۰ روز (`730d`) — ارسال `2y` در سال کبیسه (۷۳۱ روز) خطای HTTP 422 می‌دهد!
+     *  • `1d`, `1wk`: ارسال `range=max` دقت کندل را به `1mo` (ماهانه) تقلیل می‌دهد؛ `10y` کندل واقعی روزانه/هفتگی می‌دهد.
+     */
     fun yahooSpec(chartTfSec: Int, depth: Int): Pair<String, String> {
         return when {
-            chartTfSec <= Tf.M1 -> "1m" to if (depth >= 3) "7d" else "5d"
+            chartTfSec < Tf.M5 -> "1m" to if (depth >= 3) "7d" else "5d"
             chartTfSec <= Tf.M5 -> "5m" to when {
-                depth >= 3 -> "3mo"; depth == 2 -> "1mo"; else -> "7d"
+                depth >= 3 -> "60d"; depth == 2 -> "1mo"; else -> "7d"
             }
             chartTfSec <= Tf.M15 -> "15m" to when {
-                depth >= 3 -> "3mo"; depth == 2 -> "1mo"; else -> "7d"
+                depth >= 3 -> "60d"; depth == 2 -> "1mo"; else -> "7d"
             }
             chartTfSec <= Tf.M30 -> "30m" to when {
-                depth >= 3 -> "3mo"; depth == 2 -> "1mo"; else -> "7d"
+                depth >= 3 -> "60d"; depth == 2 -> "1mo"; else -> "7d"
             }
             chartTfSec <= Tf.H1 -> "1h" to when {
-                depth >= 3 -> "2y"; depth == 2 -> "1y"; else -> "3mo"
+                depth >= 3 -> "730d"; depth == 2 -> "1y"; else -> "3mo"
             }
             chartTfSec <= Tf.H4 -> "1h" to when {
-                depth >= 3 -> "2y"; depth == 2 -> "1y"; else -> "6mo"
+                depth >= 3 -> "730d"; depth == 2 -> "1y"; else -> "6mo"
             }
-            else -> "1d" to if (depth >= 3) "max" else if (depth == 2) "2y" else "1y"
+            chartTfSec <= Tf.D1 -> "1d" to when {
+                depth >= 3 -> "10y"; depth == 2 -> "5y"; else -> "1y"
+            }
+            else -> "1wk" to when {
+                depth >= 3 -> "10y"; depth == 2 -> "5y"; else -> "2y"
+            }
         }
     }
 
     /** تایم‌فریم پایه‌ای که از Yahoo می‌گیریم و بعد تجمیع می‌کنیم */
     fun baseTfFor(chartTfSec: Int): Int = when {
-        chartTfSec <= Tf.M1 -> Tf.M1
+        chartTfSec < Tf.M5 -> Tf.M1      // 1m و 3m از 1m ساخته می‌شوند
         chartTfSec <= Tf.M5 -> Tf.M5
         chartTfSec <= Tf.M15 -> Tf.M15
         chartTfSec <= Tf.M30 -> Tf.M30
         chartTfSec <= Tf.H1 -> Tf.H1
         chartTfSec <= Tf.H4 -> Tf.H1
-        else -> Tf.D1
+        chartTfSec <= Tf.D1 -> Tf.D1
+        else -> Tf.W1
     }
 
     // ── تجمیع کندل‌ها ──────────────────────────────────────────────────────────

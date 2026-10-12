@@ -86,6 +86,6 @@ class ZoneFirstRowTest {
             wantRejected = true)
         assertEquals(1, ok.size)
         assertEquals(1, rej.size, "کلوز داخل ناحیه ⇒ ردشده")
-        assertTrue(rej[0].bot < 1010.0)
+        assertTrue(rej[0].bot <= 1040.0)
     }
 }

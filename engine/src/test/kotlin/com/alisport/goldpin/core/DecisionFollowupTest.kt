@@ -191,4 +191,105 @@ class DecisionFollowupTest {
         val structureCloseBreak = Candle(2, 1_700_000_860_000L, 96.0, 97.0, 89.0, 94.0, 100.0)
         assertTrue(rearmInvalidatedByBar(setup, structureCloseBreak, midInvalidClose = true))
     }
+
+    @Test
+    fun `important candle invalidation level uses min of close a and open b for BU and max for BE`() {
+        val engine = Engine(Settings())
+        // BU pair: a bearish (c=102), b bullish (o=100, l=95 is IC). refLo must be min(a.c=102, b.o=100) = 100.0
+        invokePrivate(engine, "structureEngine", Candle(1, 3_600_000L, 110.0, 112.0, 101.0, 102.0, 100.0))
+        invokePrivate(engine, "structureEngine", Candle(2, 7_200_000L, 100.0, 108.0, 95.0, 106.0, 100.0))
+        val buPin = engine.pins.first { it.kind == 1 }
+        assertEquals(100.0, buPin.ref, 1e-9)
+
+        // BE pair: a bullish (c=106, h=115 is IC), b bearish (o=109). refHi must be max(a.c=106, b.o=109) = 109.0
+        val engine2 = Engine(Settings())
+        invokePrivate(engine2, "structureEngine", Candle(1, 3_600_000L, 100.0, 115.0, 99.0, 106.0, 100.0))
+        invokePrivate(engine2, "structureEngine", Candle(2, 7_200_000L, 109.0, 110.0, 103.0, 104.0, 100.0))
+        val bePin = engine2.pins.first { it.kind == -1 }
+        assertEquals(109.0, bePin.ref, 1e-9)
+    }
+
+    @Test
+    fun `HV confirmation does not require volume increase on the confirming candle`() {
+        val cfg = Settings()
+        val engine = Engine(cfg)
+        val broker = PaperBroker(cfg)
+        engine.broker = broker
+        broker.engine = engine
+        engine.highestBE = 250.0
+        engine.lastBEpin = 240.0
+        val setup = Setup(1L, 1, 5, 220.0, 200.0, 1, 0).apply {
+            midRef = 195.0
+            midConfirmBi = 1
+            lvBi = 2
+            lvConfBi = 2
+            lvH = 212.0
+            lvL = 205.0
+            lvReEntered = true
+            hvBi = 3
+            hvH = 210.0
+            hvL = 208.0
+            hvScanBi = 3
+        }
+        engine.setups.add(setup)
+        engine.prevChartVol = 500.0 // Confirming candle has lower volume (100 < 500)
+        engine.curBi = 4
+        engine.curT = 1_700_001_000_000L
+
+        invokePrivate(
+            engine,
+            "trigger2Engine",
+            Candle(4, engine.curT, 209.0, 212.0, 208.5, 211.0, 100.0)
+        )
+
+        assertEquals(6, setup.stage, "کندل تایید HV فقط باید بالای سقف بسته شود و شرط افزایش حجم ندارد")
+        assertEquals(1, broker.pendingOrders.size)
+    }
+
+    @Test
+    fun `only one order or position is allowed on the chart at a time`() {
+        val cfg = Settings()
+        val engine = Engine(cfg)
+        val broker = PaperBroker(cfg)
+        engine.broker = broker
+        broker.engine = engine
+
+        val s1 = Setup(1L, 1, 5, 220.0, 200.0, 1, 0).apply {
+            hvH = 210.0; hvL = 208.0; sl = 207.98; tp1 = 215.0; tp2 = 218.0; tpx = 225.0
+        }
+        val s2 = Setup(2L, 1, 5, 215.0, 195.0, 2, 0).apply {
+            hvH = 205.0; hvL = 203.0; sl = 202.98; tp1 = 210.0; tp2 = 213.0; tpx = 220.0
+        }
+        val bar = Candle(10, 1_700_001_000_000L, 211.0, 212.0, 210.0, 211.0, 100.0)
+        assertTrue(broker.registerLimit(s1, bar))
+        assertFalse(broker.registerLimit(s2, bar), "سفارش دوم هم‌زمان باید رد شود")
+        assertEquals(1, broker.pendingOrders.size)
+    }
+
+    @Test
+    fun `LV box invalidation after confirmation returns setup to stage 3`() {
+        val engine = Engine(Settings())
+        val setup = Setup(1L, 1, 4, 220.0, 200.0, 1, 0).apply {
+            midRef = 195.0
+            midConfirmBi = 1
+            lvBi = 2
+            lvConfBi = 2
+            lvH = 212.0
+            lvL = 205.0
+            lvReEntered = true
+        }
+        engine.setups.add(setup)
+        engine.curBi = 5
+        engine.curT = 1_700_001_200_000L
+
+        invokePrivate(
+            engine,
+            "trigger2Engine",
+            Candle(5, engine.curT, 206.0, 207.0, 204.5, 206.0, 100.0)
+        )
+
+        assertEquals(3, setup.stage, "عبور ۱ تیک از کف باکس LV باید باکس را باطل و ستاپ را به مرحله ۳ برگرداند")
+        assertEquals(-1, setup.lvBi)
+        assertEquals(-1, setup.lvConfBi)
+    }
 }

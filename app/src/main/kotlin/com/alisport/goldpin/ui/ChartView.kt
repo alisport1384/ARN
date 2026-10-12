@@ -64,7 +64,9 @@ class SetupOverlay(
     val tp2: Double,
     val tpx: Double,
     val midRef: Double,
-    val zBi: Int
+    val zBi: Int,
+    val lvUsed: Boolean = false,
+    val lvConfBi: Int = 0
 )
 
 class ChartView @JvmOverloads constructor(
@@ -734,15 +736,20 @@ class ChartView @JvmOverloads constructor(
         if (showVolume && volH > 0) {
             var maxV = 0.0
             for (i in from..to) if (candles[i].v > maxV) maxV = candles[i].v
-            if (maxV > 0) {
-                val base = priceH + volH
-                for (i in from..to) {
-                    val c = candles[i]
-                    val x = xOf(i.toFloat())
-                    if (x < -barW || x > plotW + barW) continue
+            val base = priceH + volH
+            for (i in from..to) {
+                val c = candles[i]
+                val x = xOf(i.toFloat())
+                if (x < -barW || x > plotW + barW) continue
+                val w = max(barW * 0.7f, 1f)
+                if (c.v <= 0.0) {
+                    // §6 سند نهایی: کندل‌هایی که حجم صفر دارند روی چارت حجم با رنگ متمایز مشخص می‌شوند
+                    val zeroH = max(volH * 0.15f, Ui.dp(context, 4f).toFloat())
+                    pVol.color = (Palette.gold and 0x00FFFFFF) or 0xCC000000.toInt()
+                    canvas.drawRect(x - w / 2f, base - zeroH, x + w / 2f, base, pVol)
+                } else if (maxV > 0) {
                     val bh = (c.v / maxV * volH).toFloat()
                     pVol.color = (if (c.c >= c.o) upCol else dnCol) and 0x66FFFFFF
-                    val w = max(barW * 0.7f, 1f)
                     canvas.drawRect(x - w / 2f, base - bh, x + w / 2f, base, pVol)
                 }
             }
@@ -1016,7 +1023,7 @@ class ChartView @JvmOverloads constructor(
             if (o.stage == 8) continue
             line(o.zTop, Color.parseColor("#39B27C"), "ناحیه", o.zBi.toFloat())
             line(o.zBot, Color.parseColor("#39B27C"), "", o.zBi.toFloat())
-            if (o.stage >= 4) {
+            if (o.stage >= 4 && !o.lvUsed && o.lvConfBi >= 0) {
                 line(o.lvH, Palette.gold, "ولوم کم", o.zBi.toFloat())
                 line(o.lvL, Palette.gold, "", o.zBi.toFloat())
             }

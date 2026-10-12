@@ -456,6 +456,10 @@ class MainActivity : Activity() {
         topRow.addView(barChip("▶") { chart?.scrollByBars(10f) })
         topRow.addView(barChip("آخرین کندل") { chart?.goLive() })
         topRow.addView(barChip("تنظیم نما") { chart?.resetView() })
+        topRow.addView(barChip("⬇ دانلود تاریخچه") {
+            toast("دانلود تاریخچه (${Tf.label(s.chartTfSec)}) شروع شد…")
+            s.downloadHistory { m -> toast(m) }
+        })
         topRow.addView(barChip("⋮ بیشتر") { showChartContextMenu() })
         col.addView(topBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         col.addView(divider())
@@ -586,7 +590,7 @@ class MainActivity : Activity() {
         cv.chartTfSec = s.chartTfSec
         cv.overlays = snap.setups.map { st ->
             SetupOverlay(st.id, st.dir, st.stage, st.zTop, st.zBot, st.lvH, st.lvL, st.hvH, st.hvL,
-                st.entry, st.sl, st.tp1, st.tp2, st.tpx, st.midRef, st.zBi)
+                st.entry, st.sl, st.tp1, st.tp2, st.tpx, st.midRef, st.zBi, st.lvUsed, st.lvConfBi)
         }
         cv.refresh()
 

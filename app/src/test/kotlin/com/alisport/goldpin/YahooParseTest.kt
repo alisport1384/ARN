@@ -109,4 +109,41 @@ class YahooParseTest {
         assertEquals("", Fa.short(null, 100))
         assertEquals("کوتاه", Fa.short("کوتاه", 100))
     }
+
+    // ── ۵) تایم‌فریم‌های بالاتر از ۱ دقیقه هرگز بازه‌های غیرمجاز Yahoo (3mo / 2y / max) نمی‌فرستند ──
+    @Test
+    fun `yahooSpec and candidate ranges respect Yahoo v8 interval limits for all timeframes`() {
+        val tfs = intArrayOf(
+            com.alisport.goldpin.core.Tf.M1,
+            180,
+            com.alisport.goldpin.core.Tf.M5,
+            com.alisport.goldpin.core.Tf.M15,
+            com.alisport.goldpin.core.Tf.M30,
+            com.alisport.goldpin.core.Tf.H1,
+            com.alisport.goldpin.core.Tf.H4,
+            com.alisport.goldpin.core.Tf.D1,
+            com.alisport.goldpin.core.Tf.W1
+        )
+        assertEquals(com.alisport.goldpin.core.Tf.M1, Feed.baseTfFor(180))
+        assertEquals(com.alisport.goldpin.core.Tf.W1, Feed.baseTfFor(com.alisport.goldpin.core.Tf.W1))
+
+        for (depth in 1..3) {
+            for (tf in tfs) {
+                val base = Feed.baseTfFor(tf)
+                val (intv, rng) = Feed.yahooSpec(base, depth)
+                if (intv in setOf("5m", "15m", "30m")) {
+                    assertTrue("بازهٔ 3mo روی $intv خطای HTTP 422 می‌دهد", rng != "3mo")
+                }
+                if (intv in setOf("1h", "60m")) {
+                    assertTrue("بازهٔ 2y در سال کبیسه روی $intv خطای HTTP 422 می‌دهد", rng != "2y")
+                }
+                if (intv in setOf("1d", "1wk")) {
+                    assertTrue("بازهٔ max روی $intv دقت داده را به ماهانه (1mo) تقلیل می‌دهد", rng != "max")
+                }
+            }
+        }
+        assertEquals("60d", Feed.yahooCandidateRanges("5m", "3mo").first())
+        assertEquals("730d", Feed.yahooCandidateRanges("1h", "2y").first())
+        assertEquals("10y", Feed.yahooCandidateRanges("1d", "max").first())
+    }
 }
