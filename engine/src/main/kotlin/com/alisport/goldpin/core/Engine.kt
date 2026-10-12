@@ -424,7 +424,7 @@ class Engine(val cfg: Settings) {
                 val iBU = bestReady(pins, 1)
                 if (iBU >= 0) {
                     val pBU = pins[iBU]
-                    if (!hasBetterActive(pins, 1, pBU.lo)) {
+                    run {
                         readyBuNow = true
                         lastBUpin = pBU.lo
                         lastBUpinRef = pBU.ref; lastBUpinHi = pBU.hi
@@ -435,10 +435,10 @@ class Engine(val cfg: Settings) {
                         alarm(AlertKind.PIN, "کندل مهم · Ready BU",
                             "کف ${f2(pBU.lo)} — کندل مهم پایین‌ترین‌ها تایید شد (${Tf.label(cfg.tfS)})")
                         expectedReady = -1
-                        pins.clear()
+                        pins.removeAt(iBU)
                         if (trend == 0 && beActive && !lastBEpin.isNaN()) {
                             tempBoxTop = lastBEpin; tempBoxBot = lastBUpin
-                        } else if (trend == -1 && !lastBEpin.isNaN()) {
+                        } else if (trend == -1 && !lastBEpin.isNaN() && LL.isNaN()) {
                             LL = lastBUpin; LH = lastBEpin
                             lhPinHi = lastBEpin; lhPinRef = lastBEpinRef; lhPinLo = lastBEpinLo; lhPinSeq = beSeq
                             llPinLo = lastBUpin; llPinRef = lastBUpinRef; llPinHi = lastBUpinHi; llPinSeq = buSeq
@@ -450,7 +450,7 @@ class Engine(val cfg: Settings) {
                 val iBE = bestReady(pins, -1)
                 if (iBE >= 0) {
                     val pBE = pins[iBE]
-                    if (!hasBetterActive(pins, -1, pBE.hi)) {
+                    run {
                         readyBeNow = true
                         lastBEpin = pBE.hi
                         lastBEpinRef = pBE.ref; lastBEpinLo = pBE.lo
@@ -461,10 +461,10 @@ class Engine(val cfg: Settings) {
                         alarm(AlertKind.PIN, "کندل مهم · Ready BE",
                             "سقف ${f2(pBE.hi)} — کندل مهم بالاترین‌ها تایید شد (${Tf.label(cfg.tfS)})")
                         expectedReady = 1
-                        pins.clear()
+                        pins.removeAt(iBE)
                         if (trend == 0 && buActive && !lastBUpin.isNaN()) {
                             tempBoxTop = lastBEpin; tempBoxBot = lastBUpin
-                        } else if (trend == 1 && !lastBUpin.isNaN()) {
+                        } else if (trend == 1 && !lastBUpin.isNaN() && HH.isNaN()) {
                             HH = lastBEpin; HL = lastBUpin
                             hlPinLo = lastBUpin; hlPinRef = lastBUpinRef; hlPinHi = lastBUpinHi; hlPinSeq = buSeq
                             hhPinHi = lastBEpin; hhPinRef = lastBEpinRef; hhPinLo = lastBEpinLo; hhPinSeq = beSeq
@@ -473,6 +473,11 @@ class Engine(val cfg: Settings) {
                 }
             }
         }
+
+        // کاندیدِ Ready که تناوب اجازهٔ ثبتش را نداد هرگز ثبت نمی‌شود؛ کاندیدهای مرده هم دور ریخته می‌شوند.
+        // کاندیدهای هنوز تاییدنشده (status=0) می‌مانند.
+        pins.removeAll { it.status != 0 }
+        while (pins.size > 400) pins.removeAt(0)
 
         // ── تعیین / ادامه / تغییر روند و ابطال پین‌ها (§4-1 سند نهایی) ──
         var evTrendUp = false; var evTrendDn = false
@@ -580,11 +585,15 @@ class Engine(val cfg: Settings) {
                         val crossedHigh = !lastBEpin.isNaN() && (sb.o > lastBEpin || sb.c > lastBEpin)
                         if (crossedRef || crossedHigh) {
                             val oldPin = lastBEpin; val oldRef = lastBEpinRef
+                            // فقط اگر pinBE باطل‌شده خودِ HH باشد، HH/HL پاک می‌شوند (سند §روند)
+                            val wasHH = !HH.isNaN() && hhPinSeq == beSeq
                             clearBEpin()
-                            HH = Double.NaN; HL = Double.NaN
-                            if (!hlPinLo.isNaN()) {
-                                lastBUpin = hlPinLo; lastBUpinRef = hlPinRef; lastBUpinHi = hlPinHi
-                                buActive = true; buSeq = hlPinSeq
+                            if (wasHH) {
+                                HH = Double.NaN; HL = Double.NaN
+                                if (!hlPinLo.isNaN()) {
+                                    lastBUpin = hlPinLo; lastBUpinRef = hlPinRef; lastBUpinHi = hlPinHi
+                                    buActive = true; buSeq = hlPinSeq
+                                }
                             }
                             expectedReady = if (buActive) -1 else 0
                             addMarker(sb.bi, oldPin, 10, "pinBE بی‌اعتبار شد")
@@ -651,11 +660,15 @@ class Engine(val cfg: Settings) {
                         val crossedLow = !lastBUpin.isNaN() && (sb.o < lastBUpin || sb.c < lastBUpin)
                         if (crossedRef || crossedLow) {
                             val oldPin = lastBUpin; val oldRef = lastBUpinRef
+                            // فقط اگر pinBU باطل‌شده خودِ LL باشد، LL/LH پاک می‌شوند
+                            val wasLL = !LL.isNaN() && llPinSeq == buSeq
                             clearBUpin()
-                            LL = Double.NaN; LH = Double.NaN
-                            if (!lhPinHi.isNaN()) {
-                                lastBEpin = lhPinHi; lastBEpinRef = lhPinRef; lastBEpinLo = lhPinLo
-                                beActive = true; beSeq = lhPinSeq
+                            if (wasLL) {
+                                LL = Double.NaN; LH = Double.NaN
+                                if (!lhPinHi.isNaN()) {
+                                    lastBEpin = lhPinHi; lastBEpinRef = lhPinRef; lastBEpinLo = lhPinLo
+                                    beActive = true; beSeq = lhPinSeq
+                                }
                             }
                             expectedReady = if (beActive) 1 else 0
                             addMarker(sb.bi, oldPin, 10, "pinBU بی‌اعتبار شد")
@@ -831,7 +844,7 @@ class Engine(val cfg: Settings) {
                     closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
                     s.midRef = Double.NaN; s.midBi = -1; s.midT = 0L; s.markBi = -1
                     s.touchMidStart = aggM.cur?.t ?: mc.t
-                    s.stage = 2
+                    s.stage = 1
                     s.lvBi = -1; s.lvT = 0L; s.lvConfBi = -1; s.lvConfT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
                     s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.hvScanBi = -1; s.runMax = Double.NaN
                     s.lvTouched = false; s.lvUsed = false; s.lvReEntered = false
@@ -1075,8 +1088,9 @@ class Engine(val cfg: Settings) {
                     closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
                     closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
                     s.midRef = Double.NaN; s.midBi = -1; s.midT = 0L; s.markBi = -1
-                    s.touchMidStart = aggM.cur?.t ?: cd.t
-                    s.stage = 2
+                    // سند §۴-۶: «کندل بعدی برای تایید میانی سنجیده می‌شود» — یعنی اولین کندل میانی بعد از کندلی که تیک شکست در آن بوده
+                    s.touchMidStart = Tf.bucket(cfg.tfM, cd.t) + cfg.tfM * 1000L
+                    s.stage = 1
                     s.lvBi = -1; s.lvT = 0L; s.lvConfBi = -1; s.lvConfT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
                     s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.hvScanBi = -1; s.runMax = Double.NaN
                     s.lvTouched = false; s.lvUsed = false; s.lvReEntered = false
@@ -1370,16 +1384,6 @@ class Engine(val cfg: Settings) {
         return idx
     }
 
-    private fun hasBetterActive(ps: List<Pin>, kind: Int, readyLevel: Double): Boolean {
-        for (p in ps) {
-            if (p.status == 0 && p.kind == kind) {
-                val lv = if (kind == 1) p.lo else p.hi
-                if (if (kind == 1) lv < readyLevel else lv > readyLevel) return true
-            }
-        }
-        return false
-    }
-
     /**
      * انتخاب کندل مهم در «پایین‌ترین‌ها» و «بالاترین‌ها» — **مطابق §4-1 سند نهایی استراتژی**.
      *
@@ -1397,6 +1401,7 @@ class Engine(val cfg: Settings) {
      */
     private fun clearBUpin() {
         buActive = false
+        buSeq = -1
         lastBUpin = Double.NaN
         lastBUpinRef = Double.NaN
         lastBUpinHi = Double.NaN
@@ -1405,6 +1410,7 @@ class Engine(val cfg: Settings) {
     /** قرینهٔ کامل برای pinBE. */
     private fun clearBEpin() {
         beActive = false
+        beSeq = -1
         lastBEpin = Double.NaN
         lastBEpinRef = Double.NaN
         lastBEpinLo = Double.NaN

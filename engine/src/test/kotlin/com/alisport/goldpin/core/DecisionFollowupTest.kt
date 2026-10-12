@@ -95,7 +95,7 @@ class DecisionFollowupTest {
     }
 
     @Test
-    fun `next middle close reconfirms after invalidation without a new structure touch`() {
+    fun `next middle candle after the broken one reconfirms without a new structure touch`() {
         val engine = Engine(Settings())
         val setup = Setup(1L, 1, 3, 95.0, 90.0, 1, 0).apply {
             midRef = 100.0
@@ -114,11 +114,20 @@ class DecisionFollowupTest {
             Candle(2, nextMiddleStart, 100.0, 102.0, 99.0, 101.0, 100.0)
         )
         assertTrue(setup.midRef.isNaN())
-        assertEquals(2, setup.stage)
-        assertEquals(nextMiddleStart, setup.touchMidStart)
+        assertEquals(1, setup.stage, "بعد از ابطال، ستاپ منتظر کلوز کندل میانی است (مرحلهٔ ۱)")
+        // سند §۴-۶: «کندل بعدی» = اولین کندل میانی بعد از کندلی که تیک شکست در آن بوده
+        val afterBreakStart = Tf.bucket(Tf.M15, nextMiddleStart) + Tf.M15 * 1000L
+        assertEquals(afterBreakStart, setup.touchMidStart)
 
-        val closingMiddle = Candle(2, nextMiddleStart, 101.0, 104.0, 98.0, 102.0, 500.0)
-        invokePrivate(engine, "middleEngine", closingMiddle)
+        // کلوز همان کندل میانیِ شکسته‌شده، تأیید تازه نمی‌دهد
+        val brokenMiddle = Candle(2, nextMiddleStart, 101.0, 104.0, 98.0, 102.0, 500.0)
+        invokePrivate(engine, "middleEngine", brokenMiddle)
+        assertTrue(setup.midRef.isNaN())
+
+        // کندل میانی بعدی تأیید می‌دهد
+        engine.curBi = 3
+        val nextMiddle = Candle(3, afterBreakStart, 102.0, 105.0, 98.0, 103.0, 500.0)
+        invokePrivate(engine, "middleEngine", nextMiddle)
         assertEquals(98.0, setup.midRef, 1e-9)
         assertEquals(2, setup.stage)
     }
