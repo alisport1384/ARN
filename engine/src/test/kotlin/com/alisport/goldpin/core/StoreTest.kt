@@ -84,14 +84,32 @@ class StoreTest {
         assertEquals(bRef.balance, ld.broker.balance, 1e-6, "موجودی نهایی")
         assertEquals(bRef.maxDrawdown, ld.broker.maxDrawdown, 1e-6, "بیشترین افت سرمایه")
 
-        // باکس‌های ناحیه: همان تعداد، همان قیمت‌ها، همان وضعیت‌ها
-        assertEquals(eRef.zones.size, ld.eng.zones.size, "تعداد باکس‌های ناحیه")
+        // باکس‌های ناحیهٔ ساختار، تریگر ۱ و تریگر ۲: همان تعداد، همان قیمت‌ها، همان وضعیت‌ها
+        assertEquals(eRef.zones.size, ld.eng.zones.size, "تعداد باکس‌های ناحیهٔ ساختار")
         for (i in eRef.zones.indices) {
             val a = eRef.zones[i]; val b = ld.eng.zones[i]
             assertEquals(a.top, b.top, 1e-9, "سقف باکس $i")
             assertEquals(a.bot, b.bot, 1e-9, "کف باکس $i")
             assertEquals(a.status, b.status, "وضعیت باکس $i")
             assertEquals(a.endBi, b.endBi, "کندل پایانی باکس $i")
+        }
+        assertTrue(eRef.t1Zones.isNotEmpty(), "باید باکس تریگر ۱ در حافظه ثبت شده باشد")
+        assertEquals(eRef.t1Zones.size, ld.eng.t1Zones.size, "تعداد باکس‌های تریگر ۱ در حافظه")
+        for (i in eRef.t1Zones.indices) {
+            val a = eRef.t1Zones[i]; val b = ld.eng.t1Zones[i]
+            assertEquals(a.top, b.top, 1e-9, "سقف تریگر ۱ $i")
+            assertEquals(a.bot, b.bot, 1e-9, "کف تریگر ۱ $i")
+            assertEquals(a.createdT, b.createdT, "زمان شروع تریگر ۱ $i")
+            assertEquals(a.status, b.status, "وضعیت تریگر ۱ $i")
+        }
+        assertTrue(eRef.t2Zones.isNotEmpty(), "باید باکس تریگر ۲ در حافظه ثبت شده باشد")
+        assertEquals(eRef.t2Zones.size, ld.eng.t2Zones.size, "تعداد باکس‌های تریگر ۲ در حافظه")
+        for (i in eRef.t2Zones.indices) {
+            val a = eRef.t2Zones[i]; val b = ld.eng.t2Zones[i]
+            assertEquals(a.top, b.top, 1e-9, "سقف تریگر ۲ $i")
+            assertEquals(a.bot, b.bot, 1e-9, "کف تریگر ۲ $i")
+            assertEquals(a.createdT, b.createdT, "زمان شروع تریگر ۲ $i")
+            assertEquals(a.status, b.status, "وضعیت تریگر ۲ $i")
         }
 
         // معاملات: تک‌تک ریزجزئیات

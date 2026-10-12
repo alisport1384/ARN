@@ -23,7 +23,7 @@ class AppState {
     val engine = Engine(cfg)
     val broker = PaperBroker(cfg)
 
-    /** کندل‌های تایم‌فریم چارت (تریگر ۲) که موتور روی آن‌ها اجرا می‌شود */
+    /** کندل‌های نمایشی تایم‌فریم چارت فعلی (chartTfSec) */
     /**
      * فهرست کندل‌ها. به‌صورت «تعویض اتمیک» به‌روزرسانی می‌شود تا نخ رابط
      * هرگز فهرست نیمه‌ساخته نبیند (منشأ قبلی فریز و پرش).
@@ -32,9 +32,21 @@ class AppState {
     var candles: List<Candle> = emptyList()
         private set
 
+    /** کندل‌های تایم‌فریم تریگر ۲ در مود انتخاب‌شده (cfg.tf2) که موتور و باکس‌ها در حافظه روی آن ثابت‌اند */
+    @Volatile
+    var modeCandles: List<Candle> = emptyList()
+        private set
+
     /** کش آخرین سری ریزدانه (۱ دقیقه) برای تجمیع آفلاین هنگام بازگشت از تایم‌فریم‌های بالاتر به پایین‌تر */
     @Volatile
     private var fineCandles: List<Candle> = emptyList()
+
+    /** کش کندل‌های دانلودشدهٔ فید به تفکیک تایم‌فریم (ثانیه) در حافظه */
+    private val tfFeedCache = java.util.concurrent.ConcurrentHashMap<Int, List<Candle>>()
+
+    /** آیا دادهٔ مود فعلی از فید آنلاین دانلود شده است؟ */
+    @Volatile
+    private var modeFromFeed: Boolean = false
 
     // تنظیمات فید (اپ)
     var symbol: String = Feed.SYMBOL_DEFAULT
@@ -125,14 +137,17 @@ class AppState {
         val lastEntryPx: Double,
         val lastSlPx: Double,
         val lastTpPx: Double,
-        val lastResult: String
+        val lastResult: String,
+        val t1Zones: List<ZoneBox> = emptyList(),
+        val t2Zones: List<ZoneBox> = emptyList()
     )
 
     @Volatile
     private var snap: UiSnapshot = UiSnapshot(
         emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
         emptyList(), emptyList(), null, null, emptyList(), emptyList(),
-        Double.NaN, Double.NaN, Double.NaN, Double.NaN, "-"
+        Double.NaN, Double.NaN, Double.NaN, Double.NaN, "-",
+        emptyList(), emptyList()
     )
 
     /** ساخت و انتشار اتمیک snapshot — باید بلافاصله بعد از هر تغییر وضعیت صدا زده شود. */
@@ -142,7 +157,8 @@ class AppState {
             engine.events.toList(), broker.orders.toList(), broker.trades.toList(),
             broker.openTrade, broker.pendingOrder, broker.openTrades, broker.pendingOrders,
             engine.lastPocPx, engine.lastEntryPx,
-            engine.lastSlPx, engine.lastTpPx, engine.lastResult
+            engine.lastSlPx, engine.lastTpPx, engine.lastResult,
+            engine.t1Zones.toList(), engine.t2Zones.toList()
         )
     }
 
@@ -161,7 +177,7 @@ class AppState {
     /** راه‌اندازی لاگر و هشدارها + وصل کردن آن‌ها به موتور و کارگزار */
     fun initApp(ctx: Context) {
         appCtx = ctx.applicationContext
-        Log.init(appCtx!!, "1.4.11")
+        Log.init(appCtx!!, "1.4.12")
         Alerts.init(appCtx!!)
         val p = appCtx!!.getSharedPreferences("goldpin", Context.MODE_PRIVATE)
         // مهاجرت ۱٫۱ → ۱٫۲: تمام‌صفحهٔ خودکار دیگر پیش‌فرض نیست؛ تنظیم قدیمی true را یک‌بار خاموش کن.
@@ -246,12 +262,13 @@ class AppState {
         }
     }
 
-    /** بعد از تغییر تنظیمات: موتور و کارگزار از صفر روی دادهٔ موجود اجرا می‌شوند. */
+    /** بعد از تغییر تنظیمات: موتور و کارگزار از صفر روی دادهٔ مود انتخاب‌شده (modeCandles) اجرا می‌شوند. */
     fun rebuild(clearOrders: Boolean = true) {
         synchronized(stateLock) {
+        val execCandles = if (modeCandles.isNotEmpty()) modeCandles else candles
         val t0 = System.currentTimeMillis()
         Log.i(Log.CAT_ENGINE, "شروع اجرای مجدد موتور",
-            "کندل=${candles.size} مود=${cfg.tfMode} چارت=${com.alisport.goldpin.core.Tf.label(chartTfSec)} بک‌تست‌کامل=$backtestFull پاک‌کردن‌سفارش=$clearOrders")
+            "کندل‌مود=${execCandles.size} مود=${cfg.tfMode} (tf2=${com.alisport.goldpin.core.Tf.label(cfg.tf2)}) چارت=${com.alisport.goldpin.core.Tf.label(chartTfSec)} بک‌تست‌کامل=$backtestFull پاک‌کردن‌سفارش=$clearOrders")
         engine.reset()
         engine.broker = broker
         broker.engine = engine
@@ -260,7 +277,7 @@ class AppState {
         val prev = Alerts.inBacktest
         Alerts.inBacktest = true
         try {
-            if (candles.isNotEmpty()) engine.feed(candles, lastIsClosed = backtestFull)
+            if (execCandles.isNotEmpty()) engine.feed(execCandles, lastIsClosed = backtestFull)
         } finally {
             // ⚠ بدون finally، هر استثنا داخل feed این پرچم را برای همیشه true می‌گذاشت
             // و از آن لحظه به بعد هیچ بنر/نوتیفیکیشن/صدایی پخش نمی‌شد.
@@ -277,13 +294,18 @@ class AppState {
     }
 
     private fun aggregateBestAvailable(targetTfSec: Int): List<Candle> {
-        val curStep = medianStepSec(candles)
+        if (targetTfSec == cfg.tf2 && modeCandles.isNotEmpty()) return modeCandles
         val fineStep = medianStepSec(fineCandles)
+        val modeStep = medianStepSec(modeCandles)
+        val curStep = medianStepSec(candles)
         val src = when {
-            candles.isNotEmpty() && curStep in 1L..targetTfSec.toLong() -> candles
+            !modeFromFeed && fineCandles.isNotEmpty() && fineStep in 1L..targetTfSec.toLong() -> fineCandles
+            modeCandles.isNotEmpty() && modeStep in 1L..targetTfSec.toLong() -> modeCandles
             fineCandles.isNotEmpty() && fineStep in 1L..targetTfSec.toLong() -> fineCandles
-            candles.isNotEmpty() -> candles
-            else -> fineCandles
+            candles.isNotEmpty() && curStep in 1L..targetTfSec.toLong() -> candles
+            modeCandles.isNotEmpty() -> modeCandles
+            fineCandles.isNotEmpty() -> fineCandles
+            else -> candles
         }
         if (src.isEmpty()) return emptyList()
         val srcStep = medianStepSec(src)
@@ -291,21 +313,19 @@ class AppState {
         return if (useSyntheticVolume) Feed.synthesizeVolumeIfMissing(agg) else agg
     }
 
-    private fun syncHierarchyForChartTf(newTf: Int) {
-        cfg.tf2 = newTf
-        if (cfg.tfMode == 5) return
-        val preset = TF_MODES.firstOrNull { !it.custom && it.t2 == newTf }
-        if (preset != null) {
-            cfg.tfMode = preset.idx
-            cfg.tfS = preset.s; cfg.tfM = preset.m; cfg.tf1 = preset.t1; cfg.tf2 = preset.t2
-            return
-        }
-        when {
-            newTf <= Tf.M30 -> { cfg.tf1 = Tf.H1; cfg.tfM = Tf.H4; cfg.tfS = Tf.D1 }
-            newTf <= Tf.H4  -> { cfg.tf1 = Tf.D1; cfg.tfM = Tf.W1; cfg.tfS = Tf.W1 * 4 }
-            newTf <= Tf.D1  -> { cfg.tf1 = Tf.W1; cfg.tfM = Tf.W1 * 4; cfg.tfS = Tf.W1 * 12 }
-            else            -> { cfg.tf1 = Tf.W1 * 4; cfg.tfM = Tf.W1 * 12; cfg.tfS = Tf.W1 * 52 }
-        }
+    private fun mergeDisplayWithMode(chart: List<Candle>, targetTfSec: Int): List<Candle> {
+        if (chart.isEmpty()) return aggregateBestAvailable(targetTfSec)
+        if (modeCandles.isEmpty() || targetTfSec < cfg.tf2) return chart
+        if (targetTfSec == cfg.tf2) return modeCandles
+        val aggMode = Feed.aggregate(modeCandles, targetTfSec)
+        if (aggMode.isEmpty()) return chart
+        val firstModeT = aggMode.first().t
+        val older = chart.filter { it.t < firstModeT }
+        if (older.isEmpty()) return aggMode
+        val combined = ArrayList<Candle>(older.size + aggMode.size)
+        combined.addAll(older)
+        combined.addAll(aggMode)
+        return combined.mapIndexed { idx, c -> Candle(idx, c.t, c.o, c.h, c.l, c.c, c.v) }
     }
 
     private fun fetchChartHistoryBlocking(targetTfSec: Int): Pair<List<Candle>, Int> {
@@ -333,15 +353,18 @@ class AppState {
         busyText = "در حال تغییر مود تایم‌فریمی…"
         notifyUi()
         cfg.tfMode = m.idx
-        val tfChanged = !m.custom && chartTfSec != m.t2
+        val tfChanged = !m.custom && (chartTfSec != m.t2 || !sameTimeframe(medianStepSec(modeCandles), m.t2.toLong()))
         if (!m.custom) {
             cfg.tfS = m.s; cfg.tfM = m.m; cfg.tf1 = m.t1; cfg.tf2 = m.t2
             chartTfSec = m.t2
         }
         io.execute {
             try {
-                if (tfChanged || !sameTimeframe(medianStepSec(candles), chartTfSec.toLong())) {
-                    val local = aggregateBestAvailable(chartTfSec)
+                val cached = tfFeedCache[cfg.tf2]
+                if (modeFromFeed && cached != null && cached.isNotEmpty()) {
+                    setCandles(cached, rebuildNow = false)
+                } else if (tfChanged || !sameTimeframe(medianStepSec(modeCandles), cfg.tf2.toLong())) {
+                    val local = aggregateBestAvailable(cfg.tf2)
                     if (local.isNotEmpty()) setCandles(local, rebuildNow = false)
                 }
                 rebuild()
@@ -354,8 +377,23 @@ class AppState {
                 notifyUi()
             }
         }
-        if (!m.custom && (tfChanged || !sameTimeframe(medianStepSec(candles), chartTfSec.toLong()))) {
-            changeChartTf(chartTfSec, forceDownload = true)
+        if (!m.custom && modeFromFeed && tfFeedCache[cfg.tf2] == null) {
+            downloadHistory()
+        }
+    }
+
+    /** تغییر تایم‌فریم تریگر ۲ در مود ۵ (سفارشی) و بازسازی موتور مود */
+    fun setCustomTf2(newTf2: Int) {
+        if (newTf2 <= 0) return
+        cfg.tf2 = newTf2
+        chartTfSec = newTf2
+        io.execute {
+            val cached = tfFeedCache[newTf2]
+            val local = if (modeFromFeed && cached != null && cached.isNotEmpty()) cached else aggregateBestAvailable(newTf2)
+            if (local.isNotEmpty()) setCandles(local, rebuildNow = true) else rebuild()
+        }
+        if (modeFromFeed && tfFeedCache[newTf2] == null) {
+            downloadHistory()
         }
     }
 
@@ -368,10 +406,29 @@ class AppState {
             if (copy.isNotEmpty() && (fineCandles.isEmpty() || (step in 1L..90L && copy.size >= fineCandles.size))) {
                 fineCandles = copy
             }
-            candles = copy                     // تعویض اتمیک
-            if (rebuildNow) rebuild()
+            modeCandles = copy
+            candles = if (chartTfSec == cfg.tf2 || sameTimeframe(step, chartTfSec.toLong()) || copy.isEmpty()) {
+                copy
+            } else {
+                aggregateBestAvailable(chartTfSec).ifEmpty { copy }
+            }
+            if (rebuildNow) rebuild() else synchronized(stateLock) { publishSnapshot() }
         } finally {
             busy = false
+        }
+        notifyUi()
+    }
+
+    /** تعویض فقط کندل‌های نمایشی چارت، بدون تغییر مود و بدون بازسازی/تغییر باکس‌های ساختار و تریگر ۱ و ۲ در حافظه */
+    fun setDisplayCandles(list: List<Candle>) {
+        val copy = ArrayList(list)
+        val step = medianStepSec(copy)
+        if (copy.isNotEmpty() && (fineCandles.isEmpty() || (step in 1L..90L && copy.size >= fineCandles.size))) {
+            fineCandles = copy
+        }
+        synchronized(stateLock) {
+            candles = copy
+            publishSnapshot()
         }
         notifyUi()
     }
@@ -380,22 +437,33 @@ class AppState {
     fun downloadHistory(onDone: (String) -> Unit = {}) {
         val t0 = System.currentTimeMillis()
         val targetTf = chartTfSec
+        val modeTf = cfg.tf2
         busy = true
         busyText = "در حال دانلود تاریخچهٔ طلا (${com.alisport.goldpin.core.Tf.label(targetTf)})…"
         lastFeedError = null
         notifyUi()
-        Log.i(Log.CAT_FEED, "شروع دانلود تاریخچه", "نماد=$symbol چارت=${com.alisport.goldpin.core.Tf.label(targetTf)} عمق=$depth")
+        Log.i(Log.CAT_FEED, "شروع دانلود تاریخچه", "نماد=$symbol چارت=${com.alisport.goldpin.core.Tf.label(targetTf)} مود=${com.alisport.goldpin.core.Tf.label(modeTf)} عمق=$depth")
         net.execute {
             try {
-                val (chart, base) = fetchChartHistoryBlocking(targetTf)
+                val needModeDownload = (targetTf == modeTf || !modeFromFeed || modeCandles.isEmpty() || !sameTimeframe(medianStepSec(modeCandles), modeTf.toLong()))
+                val (modeChart, modeBase) = if (needModeDownload) fetchChartHistoryBlocking(modeTf) else (modeCandles to baseTfSec)
+                val (chart, base) = if (targetTf == modeTf) (modeChart to modeBase) else fetchChartHistoryBlocking(targetTf)
                 val n = chart.size
                 Log.i(Log.CAT_FEED, "دانلود تاریخچه موفق",
                     "کندل=$n مدت=${System.currentTimeMillis() - t0}ms پایه=${com.alisport.goldpin.core.Tf.label(base)} چارت=${com.alisport.goldpin.core.Tf.label(targetTf)}")
                 io.execute {
                     try {
                         baseTfSec = base
-                        busyText = "در حال محاسبهٔ موتور روی ${com.alisport.goldpin.util.Fa.d(n.toString())} کندل…"
-                        setCandles(chart)
+                        modeFromFeed = true
+                        if (modeChart.isNotEmpty()) tfFeedCache[modeTf] = modeChart
+                        if (chart.isNotEmpty()) tfFeedCache[targetTf] = chart
+                        if (needModeDownload) {
+                            busyText = "در حال محاسبهٔ موتور روی ${com.alisport.goldpin.util.Fa.d(modeChart.size.toString())} کندل…"
+                            setCandles(modeChart, rebuildNow = true)
+                        }
+                        if (targetTf != modeTf) {
+                            setDisplayCandles(mergeDisplayWithMode(chart, targetTf))
+                        }
                     } finally {
                         main.post {
                             lastFeedAt = System.currentTimeMillis()
@@ -422,7 +490,7 @@ class AppState {
     }
 
     /**
-     * به‌روزرسانی زنده: فقط دنبالهٔ داده را می‌گیریم و با سری موجود ادغام می‌کنیم.
+     * به‌روزرسانی زنده: فقط دنبالهٔ دادهٔ مود (cfg.tf2) را می‌گیریم و با سری مود ادغام می‌کنیم.
      *
      * سه لایهٔ محافظ در برابر فریز:
      *  ۱) [liveGate] — حداکثر یک تیک در جریان؛ تیک‌های اضافی **حذف** می‌شوند تا صف رشد نکند.
@@ -439,14 +507,15 @@ class AppState {
             return
         }
         val t0 = System.currentTimeMillis()
-        // ۲) شبکه روی نخ جدا
+        // ۲) شبکه روی نخ جدا (همواره روی تایم‌فریم تریگر ۲ مود انتخاب‌شده تا باکس‌ها در حافظه ثابت بمانند)
         net.execute {
             var handedOff = false
             try {
-                val base = Feed.baseTfFor(chartTfSec)
+                val modeTf = cfg.tf2
+                val base = Feed.baseTfFor(modeTf)
                 val (interval, range) = Feed.yahooSpec(base, 1)
                 val raw = Feed.yahooChart(symbol, interval, range)
-                var tail = if (base == chartTfSec) raw else Feed.aggregate(raw, chartTfSec)
+                var tail = if (base == modeTf) raw else Feed.aggregate(raw, modeTf)
                 if (useSyntheticVolume) tail = Feed.synthesizeVolumeIfMissing(tail)
                 val (spot, spotSrc) = Feed.spotPrice()
                 val last = tail.lastOrNull()?.c ?: Double.NaN
@@ -457,9 +526,6 @@ class AppState {
                     try {
                         feedLiveTail(tail)
                     } finally {
-                        // دروازه دقیقاً یک‌بار آزاد می‌شود — اینجا، بعد از پایان تغییر وضعیت.
-                        // (پیش از این `handedOff = true` هم اینجا بود که لازم نیست: نخ net
-                        //  بلافاصله پس از enqueue پرچم را true می‌کند.)
                         liveGate.release()
                     }
                     liveFailStreak = 0
@@ -529,21 +595,15 @@ class AppState {
     fun feedLiveTail(tail: List<Candle>) {
         synchronized(stateLock) {
             mergeTail(tail)
-            val newClosed = (candles.size - 1) - engine.processed
+            val execCandles = if (modeCandles.isNotEmpty()) modeCandles else candles
+            val newClosed = (execCandles.size - 1) - engine.processed
             val prev = Alerts.inBacktest
             val silent = newClosed > LIVE_CATCHUP_SILENT_BARS
             if (silent) Alerts.inBacktest = true
             try {
                 engine.broker = broker
-                //  ⚠ barCommitHook فقط روی کندل بسته اجرا می‌شود (Engine آن را صدا می‌زند
-                //  و کارگزار فقط روی کندل بسته سفارش پر می‌کند و SL/TP می‌بندد، مطابق
-                //  docs/04 و docs/05 که می‌گویند قیمت زنده تصمیم‌ساز نیست).
-                //  قبلاً در اینجا candles.lastOrNull()?.let { broker.onBar(it, live=true) }
-                //  روی کندل **باز** صدا زده می‌شد و live اصلاً در PaperBroker.onBar
-                //  استفاده نمی‌شد — باعث می‌شد سفارش/پوزیشن روی تیک‌های میانهٔ کندل
-                //  پر/بسته شود، خلاف طراحی.
                 engine.barCommitHook = { cd -> broker.onBar(cd, live = false) }
-                engine.feed(candles, lastIsClosed = false)
+                engine.feed(execCandles, lastIsClosed = false)
                 publishSnapshot()
             } finally {
                 Alerts.inBacktest = prev
@@ -558,14 +618,10 @@ class AppState {
 
     fun mergeTail(tail: List<Candle>) {
         if (tail.isEmpty()) return
-        val before = candles.size
-        if (candles.isEmpty()) { setCandles(tail, rebuildNow = true); return }
-        // ⚠ محافظ تایم‌فریم: اگر فاصلهٔ کندل‌های سری موجود با دنبالهٔ تازه یکی نباشد،
-        // ادغام یعنی ساختن یک سری **قاطی** (مثلاً ۶۶۸ کندل ۱H + ۶٬۰۰۰ کندل 1m).
-        // دقیقاً همان چیزی که در لاگ کاربر رخ داد: مود ۲ سری ۱H دانلود کرده بود، مود ۱
-        // chartTfSec را 1m کرد (تجمیع ۱H به 1m ممکن نیست) و تیک لایو پنج روز کندل 1m را
-        // داخل سری ۱H ریخت ⇒ موتور ~۶٬۰۰۰ کندل «جدید» دید و برای هر کدام هشدار داد.
-        val curStep = medianStepSec(candles)
+        val baseSeries = if (modeCandles.isNotEmpty()) modeCandles else candles
+        val before = baseSeries.size
+        if (baseSeries.isEmpty()) { setCandles(tail, rebuildNow = true); return }
+        val curStep = medianStepSec(baseSeries)
         val tailStep = medianStepSec(tail)
         if (!sameTimeframe(curStep, tailStep)) {
             Log.w(Log.CAT_LIVE, "series timeframe mismatch -> replacing series",
@@ -576,22 +632,64 @@ class AppState {
         }
         val firstNew = tail.first().t
         // حذف بخش هم‌پوشان از انتهای سری فعلی
-        var cut = candles.size
-        while (cut > 0 && candles[cut - 1].t >= firstNew) cut--
+        var cut = baseSeries.size
+        while (cut > 0 && baseSeries[cut - 1].t >= firstNew) cut--
         val merged = ArrayList<Candle>(cut + tail.size)
-        for (i in 0 until cut) merged.add(candles[i])
+        for (i in 0 until cut) merged.add(baseSeries[i])
         for (c in tail) merged.add(c)
-        candles = merged.mapIndexed { i, c -> Candle(i, c.t, c.o, c.h, c.l, c.c, c.v) }
-        Log.d(Log.CAT_LIVE, "ادغام دنبالهٔ داده", "قبل=$before بعد=${candles.size} جدید=${candles.size - before}")
+        val nextMode = merged.mapIndexed { i, c -> Candle(i, c.t, c.o, c.h, c.l, c.c, c.v) }
+        modeCandles = nextMode
+        candles = if (chartTfSec == cfg.tf2 || sameTimeframe(tailStep, chartTfSec.toLong())) {
+            nextMode
+        } else {
+            val cached = tfFeedCache[chartTfSec]
+            if (cached != null && cached.isNotEmpty()) mergeDisplayWithMode(cached, chartTfSec)
+            else aggregateBestAvailable(chartTfSec).ifEmpty { nextMode }
+        }
+        Log.d(Log.CAT_LIVE, "ادغام دنبالهٔ داده", "قبل=$before بعد=${modeCandles.size} جدید=${modeCandles.size - before}")
     }
 
-    /** تغییر تایم‌فریم چارت (همراه با دانلود تاریخچهٔ مناسب و پشتیبان تجمیع داخلی) */
+    /**
+     * تغییر تایم‌فریم نمایشی چارت.
+     *
+     * ⚠ در مود انتخاب‌شده، با تغییر تایم‌فریم چارت:
+     *  • سلسله‌مراتب تایم‌فریمی مود (`cfg.tfMode/tfS/tfM/tf1/tf2`) تغییر نمی‌کند؛
+     *  • موتور و باکس‌های ساختار (`engine.zones`) و محدوده‌های تریگر ۱ (`t1Zones`/`lvH..lvL`)
+     *    و تریگر ۲ (`t2Zones`/`hvH..hvL`) در حافظه ثابت می‌مانند و بازسازی نمی‌شوند؛
+     *  • فقط کندل‌های نمایشی چارت (`candles`) به تایم‌فریم انتخاب‌شده تغییر می‌کنند.
+     */
     fun changeChartTf(newTf: Int, forceDownload: Boolean = false) {
+        if (newTf <= 0) return
         val stepMatches = sameTimeframe(medianStepSec(candles), newTf.toLong()) && candles.size >= 30
         if (!forceDownload && newTf == chartTfSec && stepMatches) return
-        Log.i(Log.CAT_CFG, "تغییر تایم‌فریم چارت", "${com.alisport.goldpin.core.Tf.label(chartTfSec)} → ${com.alisport.goldpin.core.Tf.label(newTf)}")
+        Log.i(Log.CAT_CFG, "تغییر تایم‌فریم چارت (باکس‌های مود ثابت در حافظه)",
+            "${com.alisport.goldpin.core.Tf.label(chartTfSec)} → ${com.alisport.goldpin.core.Tf.label(newTf)} · مود=${cfg.tfMode} (tf2=${com.alisport.goldpin.core.Tf.label(cfg.tf2)})")
         chartTfSec = newTf
-        syncHierarchyForChartTf(newTf)
+
+        // ۱) اگر دادهٔ تایم‌فریم مقصد از حافظه (کش فید، کندل‌های مود یا نمونهٔ ریزدانه) قابل ساخت است، بلافاصله نمایش بده
+        val cached = tfFeedCache[newTf]
+        val canAggregateLocally = (!modeFromFeed && fineCandles.isNotEmpty() && medianStepSec(fineCandles) in 1L..newTf.toLong()) ||
+            (modeCandles.isNotEmpty() && medianStepSec(modeCandles) in 1L..newTf.toLong())
+        if (!forceDownload) {
+            if (newTf == cfg.tf2 && modeCandles.isNotEmpty()) {
+                setDisplayCandles(modeCandles)
+                return
+            }
+            if (cached != null && cached.isNotEmpty()) {
+                setDisplayCandles(mergeDisplayWithMode(cached, newTf))
+                return
+            }
+            if (canAggregateLocally) {
+                val local = aggregateBestAvailable(newTf)
+                if (local.isNotEmpty()) {
+                    setDisplayCandles(local)
+                    return
+                }
+            }
+        }
+
+        // ۲) در صورت نیاز به دریافت از شبکه (مثلاً تایم‌فریم ریزتر در حالت آنلاین یا forceDownload):
+        //    فقط کندل‌های نمایشی چارت به‌روز می‌شوند و موتور/باکس‌های مود در حافظه دست‌نخورده می‌مانند.
         busy = true
         busyText = "در حال دریافت تاریخچهٔ ${com.alisport.goldpin.core.Tf.label(newTf)}…"
         lastFeedError = null
@@ -602,7 +700,13 @@ class AppState {
                 io.execute {
                     try {
                         baseTfSec = base
-                        setCandles(chart)
+                        if (chart.isNotEmpty()) tfFeedCache[newTf] = chart
+                        if (modeCandles.isEmpty()) {
+                            modeFromFeed = true
+                            setCandles(chart, rebuildNow = true)
+                        } else {
+                            setDisplayCandles(mergeDisplayWithMode(chart, newTf))
+                        }
                     } finally {
                         main.post {
                             lastFeedAt = System.currentTimeMillis()
@@ -614,11 +718,15 @@ class AppState {
                     }
                 }
             } catch (e: Exception) {
-                // بدون شبکه: از بهترین دادهٔ ریزدانهٔ موجود تجمیع می‌کنیم
+                // بدون شبکه: از بهترین دادهٔ موجود در حافظه تجمیع می‌کنیم (بدون بازسازی موتور)
                 io.execute {
                     try {
                         val chart = aggregateBestAvailable(newTf)
-                        setCandles(chart)
+                        if (modeCandles.isEmpty() && chart.isNotEmpty()) {
+                            setCandles(chart, rebuildNow = true)
+                        } else if (chart.isNotEmpty()) {
+                            setDisplayCandles(chart)
+                        }
                     } finally {
                         main.post {
                             lastFeedError = com.alisport.goldpin.util.Fa.short(
@@ -645,7 +753,8 @@ class AppState {
         )
         // ⚠ موتور/کارگزار در نخ IO تغییر می‌کنند؛ بدون قفل، Store.save روی فهرست‌های در حال
         // تغییر می‌افتاد و ConcurrentModificationException می‌داد (ذخیرهٔ خودکار حین لایو).
-        return synchronized(stateLock) { Store.save(cfg, engine, broker, candles, meta) }
+        val persistedCandles = if (modeCandles.isNotEmpty()) modeCandles else candles
+        return synchronized(stateLock) { Store.save(cfg, engine, broker, persistedCandles, meta) }
     }
 
     fun saveToAutoFile(ctx: Context): String {
@@ -694,8 +803,13 @@ class AppState {
         return try {
             // تجزیهٔ JSON (سنگین) بیرون از قفل؛ کپی وضعیت داخل قفل
             val ld = Store.load(json)
+            val m = ld.meta
+            symbol = m["symbol"]?.toString() ?: symbol
+            baseTfSec = (m["baseTfSec"] as? Long)?.toInt() ?: baseTfSec
+            depth = (m["depth"] as? Long)?.toInt() ?: depth
             synchronized(stateLock) {
                 copySettings(ld.cfg, cfg)
+                chartTfSec = (m["chartTfSec"] as? Long)?.toInt() ?: cfg.tf2
                 engine.reset()
                 broker.reset()
                 // انتقال وضعیت بازیابی‌شده به نمونه‌های سراسری
@@ -704,14 +818,19 @@ class AppState {
                 engine.broker = broker
                 broker.engine = engine
                 engine.barCommitHook = { cd -> broker.onBar(cd, live = false) }
-                candles = ArrayList(ld.candles)
+                val restoredMode = ArrayList(ld.candles)
+                val step = medianStepSec(restoredMode)
+                if (restoredMode.isNotEmpty() && (fineCandles.isEmpty() || (step in 1L..90L && restoredMode.size >= fineCandles.size))) {
+                    fineCandles = restoredMode
+                }
+                modeCandles = restoredMode
+                candles = if (chartTfSec == cfg.tf2 || sameTimeframe(step, chartTfSec.toLong()) || restoredMode.isEmpty()) {
+                    restoredMode
+                } else {
+                    aggregateBestAvailable(chartTfSec).ifEmpty { restoredMode }
+                }
                 publishSnapshot()
             }
-            val m = ld.meta
-            symbol = m["symbol"]?.toString() ?: symbol
-            baseTfSec = (m["baseTfSec"] as? Long)?.toInt() ?: baseTfSec
-            chartTfSec = (m["chartTfSec"] as? Long)?.toInt() ?: cfg.tf2
-            depth = (m["depth"] as? Long)?.toInt() ?: depth
             notifyUi()
             Log.i(Log.CAT_STORE, "بازیابی موفق",
                 "کندل=${candles.size} باکس=${engine.zones.size} (فعال=${engine.zones.count { it.status == ZoneStatus.ACTIVE }} " +
@@ -751,12 +870,19 @@ class AppState {
         dst.pins.clear(); dst.pins.addAll(src.pins)
         dst.setups.clear(); dst.setups.addAll(src.setups)
         dst.zones.clear(); dst.zones.addAll(src.zones)
+        dst.t1Zones.clear(); dst.t1Zones.addAll(src.t1Zones)
+        dst.t2Zones.clear(); dst.t2Zones.addAll(src.t2Zones)
         dst.markers.clear(); dst.markers.addAll(src.markers)
         dst.events.clear(); dst.events.addAll(src.events)
         dst.cnt.setup = src.cnt.setup; dst.cnt.touch = src.cnt.touch; dst.cnt.mid = src.cnt.mid
         dst.cnt.lv = src.cnt.lv; dst.cnt.hv = src.cnt.hv; dst.cnt.entry = src.cnt.entry
         dst.cnt.done = src.cnt.done; dst.cnt.zoneCount = src.cnt.zoneCount; dst.cnt.zoneRejected = src.cnt.zoneRejected
         dst.trend = src.trend; dst.HH = src.HH; dst.HL = src.HL; dst.LL = src.LL; dst.LH = src.LH
+        dst.tempBoxTop = src.tempBoxTop; dst.tempBoxBot = src.tempBoxBot
+        dst.hlPinLo = src.hlPinLo; dst.hlPinRef = src.hlPinRef; dst.hlPinHi = src.hlPinHi; dst.hlPinSeq = src.hlPinSeq
+        dst.hhPinHi = src.hhPinHi; dst.hhPinRef = src.hhPinRef; dst.hhPinLo = src.hhPinLo; dst.hhPinSeq = src.hhPinSeq
+        dst.lhPinHi = src.lhPinHi; dst.lhPinRef = src.lhPinRef; dst.lhPinLo = src.lhPinLo; dst.lhPinSeq = src.lhPinSeq
+        dst.llPinLo = src.llPinLo; dst.llPinRef = src.llPinRef; dst.llPinHi = src.llPinHi; dst.llPinSeq = src.llPinSeq
         dst.seqStart = src.seqStart
         dst.bullBU1Low = src.bullBU1Low; dst.bullBEHigh = src.bullBEHigh
         dst.bullBU2Low = src.bullBU2Low; dst.bullBU2Bi = src.bullBU2Bi
@@ -803,6 +929,9 @@ class AppState {
         Log.w(Log.CAT_APP, "پاک کردن همهٔ داده‌ها و وضعیت")
         synchronized(stateLock) {
             candles = emptyList()
+            modeCandles = emptyList()
+            tfFeedCache.clear()
+            modeFromFeed = false
             broker.reset()
             engine.reset()
             engine.broker = broker; broker.engine = engine
@@ -818,10 +947,12 @@ class AppState {
             val text = Feed.readCsvStream(ins)
             val raw = Feed.parseCsv(text)
             fineCandles = ArrayList(raw)
-            val list = if (chartTfSec <= Tf.M1) raw else Feed.aggregate(raw, chartTfSec)
-            Log.i(Log.CAT_FEED, "دادهٔ نمونهٔ داخلی بارگذاری شد", "کندل=${list.size}")
-            setCandles(list)
-            list.size
+            modeFromFeed = false
+            tfFeedCache.clear()
+            val modeList = if (cfg.tf2 <= Tf.M1) raw else Feed.aggregate(raw, cfg.tf2)
+            Log.i(Log.CAT_FEED, "دادهٔ نمونهٔ داخلی بارگذاری شد", "کندل‌مود=${modeList.size} مود=${cfg.tfMode} (tf2=${com.alisport.goldpin.core.Tf.label(cfg.tf2)})")
+            setCandles(modeList, rebuildNow = true)
+            candles.size
         }
         return n
     }
@@ -880,13 +1011,16 @@ class AppState {
         io.execute {
             try {
                 val text = Storage.readStream(ctx.contentResolver.openInputStream(uri)!!, gz = false)
-                var list = Feed.parseCsv(text)
+                val raw = Feed.parseCsv(text)
                 baseTfSec = baseTfGuess
-                if (baseTfGuess != chartTfSec) list = Feed.aggregate(list, chartTfSec)
-                if (useSyntheticVolume) list = Feed.synthesizeVolumeIfMissing(list)
-                setCandles(list)
+                modeFromFeed = false
+                tfFeedCache.clear()
+                if (baseTfGuess <= 90 && raw.isNotEmpty()) fineCandles = ArrayList(raw)
+                var modeList = if (baseTfGuess != cfg.tf2) Feed.aggregate(raw, cfg.tf2) else raw
+                if (useSyntheticVolume) modeList = Feed.synthesizeVolumeIfMissing(modeList)
+                setCandles(modeList, rebuildNow = true)
                 main.post {
-                    onDone("وارد شد: ${com.alisport.goldpin.util.Fa.d(list.size.toString())} کندل")
+                    onDone("وارد شد: ${com.alisport.goldpin.util.Fa.d(candles.size.toString())} کندل")
                 }
             } catch (e: Exception) {
                 Log.e(Log.CAT_FEED, "خطای ورود فایل CSV", e)

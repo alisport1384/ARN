@@ -117,6 +117,8 @@ object Store {
         o["pins"] = e.pins.map { listOf(it.kind, it.hi, it.lo, it.impBi, it.startBi, it.ref, it.status) }
         o["setups"] = e.setups.map { setupTo(it) }
         o["zones"] = e.zones.map { listOf(it.id, it.dir, it.idx, it.top, it.bot, it.createdBi, it.createdT, it.loIdx, it.hiIdx, it.endBi, it.endT, it.status) }
+        o["t1Zones"] = e.t1Zones.map { listOf(it.id, it.dir, it.idx, it.top, it.bot, it.createdBi, it.createdT, it.loIdx, it.hiIdx, it.endBi, it.endT, it.status) }
+        o["t2Zones"] = e.t2Zones.map { listOf(it.id, it.dir, it.idx, it.top, it.bot, it.createdBi, it.createdT, it.loIdx, it.hiIdx, it.endBi, it.endT, it.status) }
         o["markers"] = e.markers.map { listOf(it.t, it.bi, it.price, it.kind, it.text) }
         o["events"] = e.events.takeLast(400)
         o["cnt"] = listOf(e.cnt.setup, e.cnt.touch, e.cnt.mid, e.cnt.lv, e.cnt.hv, e.cnt.entry, e.cnt.done, e.cnt.zoneCount, e.cnt.zoneRejected)
@@ -163,6 +165,14 @@ object Store {
         for (z in m["zones"].asList()) {
             val l = z.asList(); if (l.size < 12) continue
             e.zones.add(ZoneBox(l[0].asL(), l[1].asI(), l[2].asI(), l[3].asD(), l[4].asD(), l[5].asI(), l[6].asL(), l[7].asI(), l[8].asI(), l[9].asI(), l[10].asL(), l[11].asI()))
+        }
+        for (z in m["t1Zones"].asList()) {
+            val l = z.asList(); if (l.size < 12) continue
+            e.t1Zones.add(ZoneBox(l[0].asL(), l[1].asI(), l[2].asI(), l[3].asD(), l[4].asD(), l[5].asI(), l[6].asL(), l[7].asI(), l[8].asI(), l[9].asI(), l[10].asL(), l[11].asI()))
+        }
+        for (z in m["t2Zones"].asList()) {
+            val l = z.asList(); if (l.size < 12) continue
+            e.t2Zones.add(ZoneBox(l[0].asL(), l[1].asI(), l[2].asI(), l[3].asD(), l[4].asD(), l[5].asI(), l[6].asL(), l[7].asI(), l[8].asI(), l[9].asI(), l[10].asL(), l[11].asI()))
         }
         for (mk in m["markers"].asList()) {
             val l = mk.asList(); if (l.size < 5) continue
@@ -213,26 +223,29 @@ object Store {
 
     private fun setupTo(s: Setup): Map<String, Any?> = linkedMapOf(
         "id" to s.id, "dir" to s.dir, "stage" to s.stage, "zTop" to s.zTop, "zBot" to s.zBot,
-        "zIdx" to s.zIdx, "zBi" to s.zBi, "touchBi" to s.touchBi, "touchMidStart" to s.touchMidStart,
-        "midRef" to s.midRef, "midBi" to s.midBi, "markH" to s.markH, "markL" to s.markL, "markBi" to s.markBi,
-        "lvH" to s.lvH, "lvL" to s.lvL, "lvBi" to s.lvBi, "lvConfBi" to s.lvConfBi,
-        "hvH" to s.hvH, "hvL" to s.hvL, "hvBi" to s.hvBi, "hvScanBi" to s.hvScanBi, "hvConfBi" to s.hvConfBi,
+        "zIdx" to s.zIdx, "zBi" to s.zBi, "zT" to s.zT, "touchBi" to s.touchBi, "touchMidStart" to s.touchMidStart,
+        "midRef" to s.midRef, "midBi" to s.midBi, "midT" to s.midT, "markH" to s.markH, "markL" to s.markL, "markBi" to s.markBi,
+        "lvH" to s.lvH, "lvL" to s.lvL, "lvBi" to s.lvBi, "lvT" to s.lvT, "lvConfBi" to s.lvConfBi, "lvConfT" to s.lvConfT, "lvZoneId" to s.lvZoneId,
+        "hvH" to s.hvH, "hvL" to s.hvL, "hvBi" to s.hvBi, "hvT" to s.hvT, "hvScanBi" to s.hvScanBi, "hvConfBi" to s.hvConfBi, "hvConfT" to s.hvConfT, "hvZoneId" to s.hvZoneId,
         "midConfirmBi" to s.midConfirmBi, "runMax" to s.runMax, "zGone" to s.zGone,
         "lvTouched" to s.lvTouched, "lvUsed" to s.lvUsed, "lvReEntered" to s.lvReEntered,
         "entry" to s.entry, "sl" to s.sl, "tp1" to s.tp1, "tp2" to s.tp2, "tpx" to s.tpx,
         "be" to s.be, "tp2Hit" to s.tp2Hit, "note" to s.note, "orderId" to s.orderId,
-        "armBi" to s.armBi, "armsSinceS" to s.armsSinceS, "prevEntry" to s.prevEntry,
-        "rearmAllowed" to s.rearmAllowed, "priceExpiryRef" to s.priceExpiryRef, "entryBi" to s.entryBi
+        "armBi" to s.armBi, "armT" to s.armT, "armsSinceS" to s.armsSinceS, "prevEntry" to s.prevEntry,
+        "rearmAllowed" to s.rearmAllowed, "priceExpiryRef" to s.priceExpiryRef, "entryBi" to s.entryBi, "entryT" to s.entryT
     )
 
     private fun setupFrom(m: Map<String, Any?>): Setup {
         val s = Setup(m["id"].asL(), m["dir"].asI(), m["stage"].asI(), m["zTop"].asD(), m["zBot"].asD(), m["zIdx"].asI(), m["zBi"].asI())
+        s.zT = m["zT"].asL()
         s.touchBi = m["touchBi"].asI(); s.touchMidStart = m["touchMidStart"].asL()
-        s.midRef = m["midRef"].asD(); s.midBi = m["midBi"].asI()
+        s.midRef = m["midRef"].asD(); s.midBi = m["midBi"].asI(); s.midT = m["midT"].asL()
         s.markH = m["markH"].asD(); s.markL = m["markL"].asD(); s.markBi = m["markBi"].asI()
-        s.lvH = m["lvH"].asD(); s.lvL = m["lvL"].asD(); s.lvBi = m["lvBi"].asI(); s.lvConfBi = m["lvConfBi"].asI()
-        s.hvH = m["hvH"].asD(); s.hvL = m["hvL"].asD(); s.hvBi = m["hvBi"].asI()
-        s.hvScanBi = m["hvScanBi"].asI(); s.hvConfBi = m["hvConfBi"].asI()
+        s.lvH = m["lvH"].asD(); s.lvL = m["lvL"].asD(); s.lvBi = m["lvBi"].asI(); s.lvT = m["lvT"].asL(); s.lvConfBi = m["lvConfBi"].asI(); s.lvConfT = m["lvConfT"].asL()
+        s.lvZoneId = if (m.containsKey("lvZoneId")) m["lvZoneId"].asL() else -1L
+        s.hvH = m["hvH"].asD(); s.hvL = m["hvL"].asD(); s.hvBi = m["hvBi"].asI(); s.hvT = m["hvT"].asL()
+        s.hvScanBi = m["hvScanBi"].asI(); s.hvConfBi = m["hvConfBi"].asI(); s.hvConfT = m["hvConfT"].asL()
+        s.hvZoneId = if (m.containsKey("hvZoneId")) m["hvZoneId"].asL() else -1L
         s.midConfirmBi = m["midConfirmBi"].asI(); s.runMax = m["runMax"].asD(); s.zGone = m["zGone"].asB()
         s.lvTouched = m["lvTouched"].asB(); s.lvUsed = m["lvUsed"].asB(); s.lvReEntered = m["lvReEntered"].asB()
         s.entry = m["entry"].asD(); s.sl = m["sl"].asD(); s.tp1 = m["tp1"].asD(); s.tp2 = m["tp2"].asD()
@@ -241,11 +254,13 @@ object Store {
         s.tp2Hit = m["tp2Hit"].asB()
         s.note = m["note"].asS(); s.orderId = m["orderId"].asL()
         s.armBi = if (m.containsKey("armBi")) m["armBi"].asI() else -1
+        s.armT = m["armT"].asL()
         s.armsSinceS = m["armsSinceS"].asI()
         s.prevEntry = m["prevEntry"].asD()
         s.rearmAllowed = m["rearmAllowed"].asB()
         s.priceExpiryRef = m["priceExpiryRef"].asD() // فایل‌های قدیمی: NaN و در اولین بررسی از آخرین پین پر می‌شود.
         s.entryBi = if (m.containsKey("entryBi")) m["entryBi"].asI() else -1
+        s.entryT = m["entryT"].asL()
         return s
     }
 

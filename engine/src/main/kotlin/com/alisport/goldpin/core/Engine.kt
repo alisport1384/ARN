@@ -88,7 +88,9 @@ class Engine(val cfg: Settings) {
     val setups = ArrayList<Setup>()
     val microS = ArrayList<Candle>()
 
-    val zones = ArrayList<ZoneBox>()          // همهٔ باکس‌ها با چرخهٔ عمر (برای ذخیره/بازیابی دقیق)
+    val zones = ArrayList<ZoneBox>()          // همهٔ باکس‌های ساختار با چرخهٔ عمر (برای ذخیره/بازیابی دقیق)
+    val t1Zones = ArrayList<ZoneBox>()        // باکس‌های تاییدشدهٔ تریگر ۱ (ولوم کم) در حافظه
+    val t2Zones = ArrayList<ZoneBox>()        // باکس‌های تاییدشدهٔ تریگر ۲ (ولوم زیاد) در حافظه
     val markers = ArrayList<Marker>()         // برچسب‌های استراتژی روی چارت
     val events = ArrayList<String>()          // گزارش رویدادها
     val cnt = Counters()
@@ -163,7 +165,7 @@ class Engine(val cfg: Settings) {
     fun reset() {
         aggS.reset(); aggM.reset(); agg1.reset()
         structBars.clear(); pins.clear(); setups.clear(); microS.clear()
-        zones.clear(); markers.clear(); events.clear()
+        zones.clear(); t1Zones.clear(); t2Zones.clear(); markers.clear(); events.clear()
         trend = 0; HH = Double.NaN; HL = Double.NaN; LL = Double.NaN; LH = Double.NaN
         tempBoxTop = Double.NaN; tempBoxBot = Double.NaN
         hlPinLo = Double.NaN; hlPinRef = Double.NaN; hlPinHi = Double.NaN; hlPinSeq = -1
@@ -282,6 +284,8 @@ class Engine(val cfg: Settings) {
                 if (structureElapsed && s.stage == 4 && s.rearmAllowed) {
                     s.stage = 8; s.note = "گذشت یک کندل ساختار کامل پس از مسلح‌شدن"
                     s.rearmAllowed = false
+                    closeT1Box(s, ZoneStatus.CONSUMED, i, cd.t)
+                    closeT2Box(s, ZoneStatus.DELETED, i, cd.t)
                     broker?.onSetupInvalidated(s, curT, curBi)
                     events.add("[${s.id}] یک کندل ساختار کامل پس از مسلح‌شدن گذشت — مسلح‌مجدد ممنوع")
                     lg("ENGINE", "یک کندل ساختار کامل گذشت → مسلح‌مجدد ستاپ #${s.id} ممنوع",
@@ -665,6 +669,7 @@ class Engine(val cfg: Settings) {
                     lastZoneTop = z.top; lastZoneBot = z.bot
                     cnt.setup++
                     val st = Setup(setupSeq++, trend, 0, z.top, z.bot, z.idx, sb.bi)
+                    st.zT = sb.t
                     st.note = "ثبت شد"
                     setups.add(st)
                     lg("ZONE", "ناحیهٔ فیکس‌رنج ثبت شد · Z${z.idx}",
@@ -681,16 +686,40 @@ class Engine(val cfg: Settings) {
     private fun pruneSetups() {
         //  ⚠ ستاپ‌های در حال معامله (stage=7) هرگز حذف نمی‌شوند — §۷-۲ و قانون
         //  «معاملهٔ باز هرگز به‌زور بسته نمی‌شود». اول ستاپ‌های پایان‌یافته (stage=8)،
-        //  بعد قدیمی‌ترین ستاپِ فعالِ قبل از ورود (stage<7) حذف می‌شود.
+        //  سپس ستاپ‌های دست‌نخورده (stage=0) و مراحل اولیه حذف می‌شوند تا ستاپ‌های دارای
+        //  محدودهٔ فعال تریگر ۱ و ۲ محفوظ بمانند.
         while (setups.size > cfg.maxSetups) {
             var pick = setups.indexOfFirst { it.stage == 8 }
-            if (pick < 0) pick = setups.indexOfFirst { it.stage < 7 }
+            if (pick < 0) pick = setups.indexOfFirst { it.stage == 0 }
+            if (pick < 0) pick = setups.indexOfFirst { it.stage in 1..3 }
+            if (pick < 0) pick = setups.indexOfFirst { it.stage in 4..5 }
+            if (pick < 0) pick = setups.indexOfFirst { it.stage == 6 }
             if (pick < 0) break   // همه ستاپ‌ها در معامله‌اند — بیش از این حذف نمی‌کنیم
             val s = setups.removeAt(pick)
             if (s.stage < 7) {
+                closeT1Box(s, ZoneStatus.CAP, curBi, curT)
+                closeT2Box(s, ZoneStatus.CAP, curBi, curT)
                 events.add("[${s.id}] پروندهٔ ستاپ بسته شد (سقف ستاپ‌های هم‌زمان)")
                 broker?.onSetupInvalidated(s, curT, curBi)
             }
+        }
+    }
+
+    private fun closeT1Box(s: Setup, status: Int, endBi: Int = curBi, endT: Long = curT) {
+        if (s.lvZoneId >= 0) {
+            t1Zones.firstOrNull { it.id == s.lvZoneId && it.status == ZoneStatus.ACTIVE }?.let {
+                it.status = status; it.endBi = endBi; it.endT = endT
+            }
+            s.lvZoneId = -1L
+        }
+    }
+
+    private fun closeT2Box(s: Setup, status: Int, endBi: Int = curBi, endT: Long = curT) {
+        if (s.hvZoneId >= 0) {
+            t2Zones.firstOrNull { it.id == s.hvZoneId && it.status == ZoneStatus.ACTIVE }?.let {
+                it.status = status; it.endBi = endBi; it.endT = endT
+            }
+            s.hvZoneId = -1L
         }
     }
 
@@ -718,6 +747,7 @@ class Engine(val cfg: Settings) {
                 // ✔ تایید میانی
                 s.midRef = if (s.dir == 1) mc.l else mc.h
                 s.midBi = mc.bi
+                s.midT = mc.t
                 s.midConfirmBi = curBi
                 s.markBi = -1; s.markH = Double.NaN; s.markL = Double.NaN
                 s.stage = 2
@@ -743,11 +773,13 @@ class Engine(val cfg: Settings) {
                     //  در غیر این‌صورت سفارش یتیم می‌ماند و ممکن است در کندل بعد پر شود
                     //  در حالی که موتور دیگر آن ستاپ را نمی‌شناسد.
                     if (s.stage == 6) broker?.onSetupInvalidated(s, curT, curBi)
-                    s.midRef = Double.NaN; s.midBi = -1; s.markBi = -1
+                    closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                    closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
+                    s.midRef = Double.NaN; s.midBi = -1; s.midT = 0L; s.markBi = -1
                     s.touchMidStart = aggM.cur?.t ?: mc.t
                     s.stage = 2
-                    s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
-                    s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                    s.lvBi = -1; s.lvT = 0L; s.lvConfBi = -1; s.lvConfT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
+                    s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.hvScanBi = -1; s.runMax = Double.NaN
                     s.lvTouched = false; s.lvUsed = false; s.lvReEntered = false
                     s.orderId = -1
                     addMarker(mc.bi, old, 10, "تایید میانی باطل شد")
@@ -777,6 +809,7 @@ class Engine(val cfg: Settings) {
                     if (lvViol) {
                         s.lvUsed = true
                         s.rearmAllowed = false
+                        closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
                     } else {
                         val inside = q1.l <= s.lvH && q1.h >= s.lvL
                         if (inside && !s.lvTouched) {
@@ -786,6 +819,7 @@ class Engine(val cfg: Settings) {
                             if (left) {
                                 s.lvUsed = true
                                 s.rearmAllowed = false
+                                closeT1Box(s, ZoneStatus.CONSUMED, curBi, curT)
                                 addMarker(q1.bi, if (bullL) s.lvH else s.lvL, 11, "باکس ولوم کم مصرف شد ✖")
                                 lg("ZONE", "باکس تریگر۱ هنگام معامله مصرف شد؛ مسلح‌مجدد بسته شد · ستاپ #${s.id}",
                                     "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi}")
@@ -802,7 +836,7 @@ class Engine(val cfg: Settings) {
             if (!s.lvUsed && s.lvConfBi < 0 && s.stage <= 4) {
                 if (s.lvBi < 0) {
                     if (prevT1Vol.isNaN() || q1.v < prevT1Vol) {
-                        s.lvBi = q1.bi; s.lvH = q1.h; s.lvL = q1.l
+                        s.lvBi = q1.bi; s.lvT = q1.t; s.lvH = q1.h; s.lvL = q1.l
                         addMarker(q1.bi, if (bullL) q1.l else q1.h, 4, "کندل ولوم کم (تریگر۱)")
                         lg("ENGINE", "کندل ولوم کم مارک شد · ستاپ #${s.id}",
                             "vol=${f2(q1.v)} < prev=${f2(prevT1Vol)} hi=${f2(q1.h)} lo=${f2(q1.l)} bar=${q1.bi}")
@@ -811,17 +845,21 @@ class Engine(val cfg: Settings) {
                     val violL = if (bullL) q1.l < s.lvL else q1.h > s.lvH
                     val confL = if (bullL) q1.c > s.lvH else q1.c < s.lvL
                     if (violL) {
-                        s.lvBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                        s.lvBi = -1; s.lvT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
                     } else if (confL) {
-                        s.lvConfBi = curBi
+                        s.lvConfBi = curBi; s.lvConfT = curT
                         lvConfirmedNow = true
                         s.stage = 4
                         cnt.lv++
                         s.lvTouched = false
                         s.lvReEntered = false
                         s.hvScanBi = -1
-                        s.hvBi = -1
+                        s.hvBi = -1; s.hvT = 0L
                         if (!cfg.hvScanFirstTouch) s.hvScanBi = curBi
+                        closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                        val zb1 = ZoneBox(zoneSeq++, s.dir, 1, s.lvH, s.lvL, s.lvBi, s.lvT, 0, 0, curBi, curT, ZoneStatus.ACTIVE)
+                        t1Zones.add(zb1)
+                        s.lvZoneId = zb1.id
                         addMarker(q1.bi, if (bullL) s.lvH else s.lvL, 5, "ناحیهٔ ولوم کم ✔ (تریگر۱)")
                         lg("ENGINE", "ناحیهٔ ولوم کم تایید شد · ستاپ #${s.id}",
                             "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi} مرحله=${s.stage}")
@@ -836,9 +874,11 @@ class Engine(val cfg: Settings) {
                 val lvViolAfter = if (bullL) q1.l < s.lvL else q1.h > s.lvH
                 if (lvViolAfter) {
                     if (s.stage in 4..5) {
-                        s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                        closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                        closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
+                        s.lvBi = -1; s.lvT = 0L; s.lvConfBi = -1; s.lvConfT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
                         s.lvTouched = false; s.lvReEntered = false
-                        s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                        s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.hvScanBi = -1; s.runMax = Double.NaN
                         s.stage = 3
                         s.note = "نقض ناحیهٔ ولوم کم (تریگر۱)"
                         addMarker(q1.bi, if (bullL) q1.l else q1.h, 10, "ابطال ناحیهٔ ولوم کم")
@@ -848,6 +888,7 @@ class Engine(val cfg: Settings) {
                     } else if (s.stage == 6) {
                         s.lvUsed = true
                         s.rearmAllowed = false
+                        closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
                     }
                 }
             }
@@ -864,6 +905,7 @@ class Engine(val cfg: Settings) {
                     val left = if (bullL) q1.c > s.lvH else q1.c < s.lvL
                     if (left) {
                         s.lvUsed = true
+                        closeT1Box(s, ZoneStatus.CONSUMED, curBi, curT)
                         addMarker(q1.bi, if (bullL) s.lvH else s.lvL, 11, "باکس ولوم کم مصرف شد ✖")
                         lg("ZONE", "باکس ولوم کم مصرف شد (یک‌بارمصرف) · ستاپ #${s.id}",
                             "box=${f2(s.lvL)}-${f2(s.lvH)} bar=${q1.bi}")
@@ -875,6 +917,7 @@ class Engine(val cfg: Settings) {
                             s.stage = 8
                             s.note = "باکس ولوم کم مصرف شد (یک‌بار، قبل از مسلح)"
                             events.add("[${s.id}] باکس ولوم کم قبل از مسلح مصرف شد — ستاپ تمام")
+                            closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
                             broker?.onSetupInvalidated(s, curT, curBi)
                         } else if (s.stage == 6) {
                             s.note = "باکس ولوم کم مصرف شد (سفارش معلق زنده ماند)"
@@ -920,12 +963,14 @@ class Engine(val cfg: Settings) {
                     } else {
                         "باز/کلوز از زیر pinBU هنگام مسلح‌شدن (${f2(s.priceExpiryRef)}) عبور کرد"
                     }
+                    closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
                     s.stage = if (s.lvUsed || barExpire) 8 else 4
+                    if (s.stage == 8) closeT1Box(s, ZoneStatus.CONSUMED, curBi, curT)
                     s.note = "سفارش منقضی"
                     events.add("[${s.id}] سفارش منقضی شد — $expReason")
                     broker?.onSetupExpired(s, curT, curBi, expReason)
                     s.orderId = -1
-                    s.hvBi = -1; s.runMax = volume
+                    s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.runMax = volume
                     if (s.stage == 4) s.rearmAllowed = true
                     lg("ENGINE", "سفارش معلق منقضی شد · ستاپ #${s.id}",
                         "reason=$expReason stage=${s.stage} bar=$curBi")
@@ -934,14 +979,17 @@ class Engine(val cfg: Settings) {
                     s.entry = if (bull) s.hvH else s.hvL
                     s.stage = 7
                     s.entryBi = curBi   // کندل پرشدن — برای قاعده §۶-۲۱
+                    s.entryT = curT
                     cnt.entry++
                     lastEntryPx = s.entry; lastSlPx = s.sl; lastTpPx = s.tpx
                     addMarker(curBi, s.entry, 8, (if (bull) "ورود خرید" else "ورود فروش") + " @ " + f2(s.entry))
                     lg("TRADE", "قیمت به ناحیهٔ ولوم زیاد برگشت (شرط ورود) · ستاپ #${s.id}",
                         "ورود=${f2(s.entry)} bar=$curBi")
                 } else if (hvViol) {
-                    s.hvBi = -1; s.runMax = volume
+                    closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
+                    s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.runMax = volume
                     s.stage = if (s.lvUsed) 8 else 4
+                    if (s.stage == 8) closeT1Box(s, ZoneStatus.CONSUMED, curBi, curT)
                     broker?.onSetupInvalidated(s, curT, curBi)
                     s.orderId = -1
                     if (s.stage == 4) {
@@ -970,11 +1018,13 @@ class Engine(val cfg: Settings) {
                 if (brokenMid) {
                     val old = s.midRef
                     if (s.stage == 6) broker?.onSetupInvalidated(s, curT, curBi)
-                    s.midRef = Double.NaN; s.midBi = -1; s.markBi = -1
+                    closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                    closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
+                    s.midRef = Double.NaN; s.midBi = -1; s.midT = 0L; s.markBi = -1
                     s.touchMidStart = aggM.cur?.t ?: cd.t
                     s.stage = 2
-                    s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
-                    s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                    s.lvBi = -1; s.lvT = 0L; s.lvConfBi = -1; s.lvConfT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
+                    s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.hvScanBi = -1; s.runMax = Double.NaN
                     s.lvTouched = false; s.lvUsed = false; s.lvReEntered = false
                     s.orderId = -1
                     addMarker(curBi, old, 10, "تایید میانی باطل شد")
@@ -1003,6 +1053,8 @@ class Engine(val cfg: Settings) {
                 if (broken) {
                     //  اگر سفارش معلق داشت (stage=6) آن را هم لغو کن
                     if (s.stage == 6) broker?.onSetupInvalidated(s, curT, curBi)
+                    closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                    closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
                     s.zGone = true
                     s.stage = 8
                     s.note = "شکست ناحیهٔ ساختار (لغو)"
@@ -1021,9 +1073,11 @@ class Engine(val cfg: Settings) {
                 val lvViol = if (bull) low < s.lvL else high > s.lvH
                 if (lvViol) {
                     if (s.stage in 4..5) {
-                        s.lvBi = -1; s.lvConfBi = -1; s.lvH = Double.NaN; s.lvL = Double.NaN
+                        closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                        closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
+                        s.lvBi = -1; s.lvT = 0L; s.lvConfBi = -1; s.lvConfT = 0L; s.lvH = Double.NaN; s.lvL = Double.NaN
                         s.lvTouched = false; s.lvReEntered = false
-                        s.hvBi = -1; s.hvConfBi = -1; s.hvScanBi = -1; s.runMax = Double.NaN
+                        s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.hvScanBi = -1; s.runMax = Double.NaN
                         s.stage = 3
                         s.note = "نقض ناحیهٔ ولوم کم (تریگر۱)"
                         addMarker(curBi, if (bull) low else high, 10, "ابطال ناحیهٔ ولوم کم")
@@ -1032,6 +1086,7 @@ class Engine(val cfg: Settings) {
                     } else if (s.stage in 6..7) {
                         s.lvUsed = true
                         s.rearmAllowed = false
+                        closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
                     }
                 }
             }
@@ -1058,7 +1113,7 @@ class Engine(val cfg: Settings) {
                     val viol = marked && (if (bull) low < s.hvL else high > s.hvH)
                     val conf = marked && (if (bull) close > s.hvH else close < s.hvL)
                     if (viol) {
-                        s.hvBi = -1; s.runMax = volume; s.stage = 4
+                        s.hvBi = -1; s.hvT = 0L; s.runMax = volume; s.stage = 4
                         lg("ENGINE", "کندل ولوم زیاد نقض شد → جست‌وجوی کندل جدید · ستاپ #${s.id}",
                             "hvH=${f2(s.hvH)} hvL=${f2(s.hvL)} bar=$curBi")
                     } else if (conf) {
@@ -1070,7 +1125,7 @@ class Engine(val cfg: Settings) {
                             volume > (s.runMax.takeIf { !it.isNaN() } ?: Double.NEGATIVE_INFINITY)
                         }
                         if (markNow) {
-                            s.hvBi = curBi; s.hvH = high; s.hvL = low
+                            s.hvBi = curBi; s.hvT = curT; s.hvH = high; s.hvL = low
                             s.runMax = volume; s.stage = 5
                             addMarker(curBi, if (bull) low else high, 6, "کندل ولوم زیاد (مارک)")
                             lg("ENGINE", "کندل ولوم زیاد مارک شد · ستاپ #${s.id}",
@@ -1152,18 +1207,20 @@ class Engine(val cfg: Settings) {
                     addMarker(curBi, px, 9, note + " @ " + f2(px))
                     lg("TRADE", "پایان معامله · ستاپ #${s.id} → $note",
                         "خروج=${f2(px)} bar=$curBi")
+                    closeT2Box(s, ZoneStatus.CONSUMED, curBi, curT)
                     // §4-8: پس از SL/سر‌به‌سر (نه TPX)، فقط اگر ساختار، میانی و تریگر۱
                     // هنوز معتبر باشند، همان ستاپ برای HV جدید می‌ماند؛ معاملهٔ باز در صورت نقض بسته نمی‌شود.
                     val finalWin = note.contains("1.272")
                     if (!finalWin && s.rearmAllowed && rearmPrerequisitesValid(s)) {
                         s.stage = 4
-                        s.hvBi = -1; s.runMax = volume
+                        s.hvBi = -1; s.hvT = 0L; s.hvConfBi = -1; s.hvConfT = 0L; s.runMax = volume
                         // lvReEntered حفظ می‌شود: بازگشت اول تریگر۱ قبلاً رخ داده؛ برگشت دوم مجاز نیست.
                         s.be = false; s.tp2Hit = false
                         s.orderId = -1
                         lg("ENGINE", "معامله بسته شد؛ مسلح‌مجدد مجاز ماند (پیش‌نیازهای ستاپ برقرارند) · ستاپ #${s.id}",
                             "reason=$note bar=$curBi")
                     } else {
+                        closeT1Box(s, ZoneStatus.CONSUMED, curBi, curT)
                         s.stage = 8
                         s.rearmAllowed = false
                         cnt.done++
@@ -1190,14 +1247,14 @@ class Engine(val cfg: Settings) {
         val isRearm = !s.prevEntry.isNaN()
         if (isRearm) {
             if (!s.rearmAllowed || !rearmPrerequisitesValid(s)) {
-                s.hvBi = -1; s.runMax = Double.NaN
+                s.hvBi = -1; s.hvT = 0L; s.runMax = Double.NaN
                 lg("ENGINE", "مسلح‌مجدد ستاپ #${s.id} رد شد (پیش‌نیازهای ساختار/میانی/تریگر۱ برقرار نیست)",
                     "rearmAllowed=${s.rearmAllowed} zGone=${s.zGone} midValid=${!s.midRef.isNaN()} lvBi=${s.lvBi} lvReEntered=${s.lvReEntered} lvUsed=${s.lvUsed} bar=$curBi")
                 return
             }
             val better = if (bull) eRef < s.prevEntry else eRef > s.prevEntry
             if (!better) {
-                s.hvBi = -1; s.runMax = Double.NaN
+                s.hvBi = -1; s.hvT = 0L; s.runMax = Double.NaN
                 lg("ENGINE", "مسلح مجدد برای ستاپ #${s.id} رد شد (ورود جدید بهتر از قبلی نیست)",
                     "prev=${f2(s.prevEntry)} new=${f2(eRef)} bar=$curBi")
                 return
@@ -1206,7 +1263,7 @@ class Engine(val cfg: Settings) {
         // §4-8 و §10 سند نهایی: ما فقط مجاز به گذاشتن ۱ سفارش در چارت هستیم (حداکثر ۱ سفارش معلق یا ۱ معامله باز).
         val hasActiveSetupOrder = setups.any { it.id != s.id && (it.stage == 6 || it.stage == 7) }
         if (hasActiveSetupOrder) {
-            s.hvBi = -1; s.runMax = Double.NaN
+            s.hvBi = -1; s.hvT = 0L; s.runMax = Double.NaN
             lg("ENGINE", "مسلح‌شدن ستاپ #${s.id} رد شد — سفارش یا معاملهٔ فعال دیگری در چارت وجود دارد",
                 "bar=$curBi")
             return
@@ -1214,12 +1271,13 @@ class Engine(val cfg: Settings) {
         //  ⚠ فقط اگر کارگزار واقعاً سفارش را ثبت کرد (یا در حالت بدون کارگزار) به stage=6 می‌رویم.
         val registered = broker?.registerLimit(s, cd) ?: true
         if (!registered) {
-            s.hvBi = -1; s.runMax = Double.NaN
+            s.hvBi = -1; s.hvT = 0L; s.runMax = Double.NaN
             lg("ENGINE", "ثبت سفارش برای ستاپ #${s.id} رد شد (${broker?.lastError}) — کندل HV ریست شد",
                 "bar=$curBi")
             return
         }
         s.armBi = curBi
+        s.armT = curT
         s.armsSinceS++
         s.prevEntry = eRef
         // Pin-level expiration applies to the latest opposing pin as it stood when this order armed.
@@ -1228,6 +1286,11 @@ class Engine(val cfg: Settings) {
         s.stage = 6
         cnt.hv++
         s.hvConfBi = curBi
+        s.hvConfT = curT
+        closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
+        val zb2 = ZoneBox(zoneSeq++, s.dir, 2, s.hvH, s.hvL, s.hvBi, s.hvT, 0, 0, curBi, curT, ZoneStatus.ACTIVE)
+        t2Zones.add(zb2)
+        s.hvZoneId = zb2.id
         s.entry = eRef
         s.be = false
         s.tp2Hit = false
@@ -1298,6 +1361,8 @@ class Engine(val cfg: Settings) {
         while (it.hasNext()) {
             val s = it.next()
             if (s.dir == dir && s.stage < 7) {
+                closeT1Box(s, ZoneStatus.DELETED, curBi, curT)
+                closeT2Box(s, ZoneStatus.DELETED, curBi, curT)
                 s.stage = 8
                 s.note = "لغو (تغییر روند)"
                 events.add("[${s.id}] لغو شد — تغییر روند")
@@ -1305,6 +1370,12 @@ class Engine(val cfg: Settings) {
                 broker?.onSetupInvalidated(s, curT, curBi)
                 it.remove()
             }
+        }
+        for (zb in t1Zones) if (zb.dir == dir && zb.status == ZoneStatus.ACTIVE) {
+            zb.status = ZoneStatus.DELETED; zb.endBi = curBi; zb.endT = curT
+        }
+        for (zb in t2Zones) if (zb.dir == dir && zb.status == ZoneStatus.ACTIVE) {
+            zb.status = ZoneStatus.DELETED; zb.endBi = curBi; zb.endT = curT
         }
     }
 
@@ -1345,13 +1416,15 @@ class Setup(
     var zIdx: Int,
     var zBi: Int
 ) {
+    var zT = 0L
     var touchBi = -1
     var touchMidStart = 0L
     var midRef = Double.NaN
     var midBi = -1
+    var midT = 0L
     var markH = Double.NaN; var markL = Double.NaN; var markBi = -1
-    var lvH = Double.NaN; var lvL = Double.NaN; var lvBi = -1; var lvConfBi = -1
-    var hvH = Double.NaN; var hvL = Double.NaN; var hvBi = -1; var hvScanBi = -1; var hvConfBi = -1
+    var lvH = Double.NaN; var lvL = Double.NaN; var lvBi = -1; var lvT = 0L; var lvConfBi = -1; var lvConfT = 0L; var lvZoneId = -1L
+    var hvH = Double.NaN; var hvL = Double.NaN; var hvBi = -1; var hvT = 0L; var hvScanBi = -1; var hvConfBi = -1; var hvConfT = 0L; var hvZoneId = -1L
     var midConfirmBi = -1
     var runMax = Double.NaN
     var zGone = false
@@ -1369,11 +1442,13 @@ class Setup(
     var orderId = -1L
     // §4-8 سند نهایی: انقضای سفارش معلق
     var armBi = -1                // کندلی که در آن مسلح شدیم
+    var armT = 0L
     var armsSinceS = 0            // تعداد مسلح‌شدن در این ستاپ (برای شرط «پایین‌تر/بالاتر»)
     var prevEntry = Double.NaN    // ورود قبلی در همین ستاپ (برای مقایسه)
     var rearmAllowed = false      // آیا اعتبار ساختار/میانی/تریگر۱ برای مسلح‌مجدد حفظ شده است
     var priceExpiryRef = Double.NaN // آخرین پین مخالف هنگام مسلح‌شدن این سفارش
     var entryBi = -1              // کندلی که ورود در آن پر شد (برای قاعده «ورود و TP1 در یک کندل»)
+    var entryT = 0L
     val bull: Boolean get() = dir == 1
 }
 

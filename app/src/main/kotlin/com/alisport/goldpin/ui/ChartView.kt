@@ -66,7 +66,12 @@ class SetupOverlay(
     val midRef: Double,
     val zBi: Int,
     val lvUsed: Boolean = false,
-    val lvConfBi: Int = 0
+    val lvConfBi: Int = 0,
+    val zT: Long = 0L,
+    val midT: Long = 0L,
+    val lvT: Long = 0L,
+    val hvT: Long = 0L,
+    val armT: Long = 0L
 )
 
 class ChartView @JvmOverloads constructor(
@@ -77,6 +82,8 @@ class ChartView @JvmOverloads constructor(
     // ── داده ───────────────────────────────────────────────────────────────────
     var candles: List<Candle> = emptyList()
     var zones: List<ZoneBox> = emptyList()
+    var t1Zones: List<ZoneBox> = emptyList()
+    var t2Zones: List<ZoneBox> = emptyList()
     var markers: List<Marker> = emptyList()
     var overlays: List<SetupOverlay> = emptyList()
     var trades: List<Trade> = emptyList()
@@ -238,6 +245,26 @@ class ChartView @JvmOverloads constructor(
     /** تبدیل ایندکس کندل به مکان افقی */
     fun xOf(idx: Float): Float = plotW - (rightIdx - idx) * barW
 
+    /** نگاشت زمان کندلِ موتور به ایندکس کندلِ نمایش‌داده‌شده در تایم‌فریم چارت فعلی */
+    fun idxOfTime(t: Long, fallbackBi: Int = 0): Int {
+        if (candles.isEmpty()) return 0
+        if (t <= 0L) return fallbackBi.coerceIn(0, candles.size - 1)
+        var lo = 0
+        var hi = candles.size - 1
+        if (t <= candles[lo].t) return lo
+        if (t >= candles[hi].t) return hi
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            val mt = candles[mid].t
+            when {
+                mt == t -> return mid
+                mt < t -> lo = mid + 1
+                else -> hi = mid - 1
+            }
+        }
+        return hi.coerceIn(0, candles.size - 1)
+    }
+
     /** ایندکس کندل زیر مکان افقی داده‌شده */
     fun indexAtX(x: Float): Float = rightIdx - (plotW - x) / barW
 
@@ -387,9 +414,29 @@ class ChartView @JvmOverloads constructor(
             }
         }
         if (lo == Double.MAX_VALUE) { lo = 0.0; hi = 1.0 }
+        val firstT = if (candles.isNotEmpty()) candles.first().t else 0L
         for (z in zones) {
             if (z.status == ZoneStatus.CAP) continue
-            if ((z.createdBi in from..to) || (z.endBi in from..to)) {
+            if (z.status != ZoneStatus.ACTIVE && z.endT > 0L && z.endT < firstT) continue
+            val sBi = idxOfTime(z.createdT, z.createdBi)
+            val eBi = if (z.status == ZoneStatus.ACTIVE) candles.size - 1 else idxOfTime(z.endT, z.endBi)
+            if (sBi <= to && eBi >= from) {
+                if (z.bot < lo) lo = z.bot
+                if (z.top > hi) hi = z.top
+            }
+        }
+        for (z in t1Zones) {
+            if (z.status != ZoneStatus.ACTIVE) continue
+            val sBi = idxOfTime(z.createdT, z.createdBi)
+            if (sBi <= to) {
+                if (z.bot < lo) lo = z.bot
+                if (z.top > hi) hi = z.top
+            }
+        }
+        for (z in t2Zones) {
+            if (z.status != ZoneStatus.ACTIVE) continue
+            val sBi = idxOfTime(z.createdT, z.createdBi)
+            if (sBi <= to) {
                 if (z.bot < lo) lo = z.bot
                 if (z.top > hi) hi = z.top
             }
@@ -933,10 +980,13 @@ class ChartView @JvmOverloads constructor(
     }
 
     private fun drawZones(canvas: Canvas, from: Int, to: Int, priceH: Float) {
+        val firstT = if (candles.isNotEmpty()) candles.first().t else 0L
         for (z in zones) {
             if (z.status == ZoneStatus.CAP) continue
-            val x1 = xOf(z.createdBi.toFloat())
-            val endIdx = if (z.status == ZoneStatus.ACTIVE) rightIdx + 2f else z.endBi.toFloat()
+            if (z.status != ZoneStatus.ACTIVE && z.endT > 0L && z.endT < firstT) continue
+            val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
+            val endIdx = if (z.status == ZoneStatus.ACTIVE) rightIdx + 2f else idxOfTime(z.endT, z.endBi).toFloat()
+            val x1 = xOf(startIdx)
             val x2 = xOf(endIdx)
             if (x2 < -barW || x1 > plotW + barW) continue
             val left = max(min(x1, x2), -barW)
@@ -966,12 +1016,50 @@ class ChartView @JvmOverloads constructor(
                 canvas.drawText("Z${Fa.d(z.idx.toString())}", left + Ui.dp(context, 5f), yT + Ui.dp(context, 12.5f), pLabelTxt)
             }
         }
+        // باکس‌های تاییدشدهٔ تریگر ۱ (ولوم کم) و تریگر ۲ (ولوم زیاد) ثبت‌شده در حافظهٔ مود انتخاب‌شده
+        for (z in t1Zones) {
+            if (z.status != ZoneStatus.ACTIVE) continue
+            val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
+            val x1 = xOf(startIdx)
+            val x2 = xOf(rightIdx + 2f)
+            if (x2 < -barW || x1 > plotW + barW) continue
+            val left = max(min(x1, x2), -barW)
+            val right = min(max(x1, x2), plotW + barW)
+            val yT = yOf(z.top)
+            val yB = yOf(z.bot)
+            pZoneFill.color = (Palette.gold and 0x00FFFFFF) or (28 shl 24)
+            pZoneFill.style = Paint.Style.FILL
+            canvas.drawRect(left, yT, right, yB, pZoneFill)
+            pDotted.color = (Palette.gold and 0x00FFFFFF) or 0xB0000000.toInt()
+            canvas.drawLine(left, yT, right, yT, pDotted)
+            canvas.drawLine(left, yB, right, yB, pDotted)
+        }
+        for (z in t2Zones) {
+            if (z.status != ZoneStatus.ACTIVE) continue
+            val startIdx = idxOfTime(z.createdT, z.createdBi).toFloat()
+            val x1 = xOf(startIdx)
+            val x2 = xOf(rightIdx + 2f)
+            if (x2 < -barW || x1 > plotW + barW) continue
+            val left = max(min(x1, x2), -barW)
+            val right = min(max(x1, x2), plotW + barW)
+            val yT = yOf(z.top)
+            val yB = yOf(z.bot)
+            pZoneFill.color = (Palette.accent and 0x00FFFFFF) or (28 shl 24)
+            pZoneFill.style = Paint.Style.FILL
+            canvas.drawRect(left, yT, right, yB, pZoneFill)
+            pDotted.color = (Palette.accent and 0x00FFFFFF) or 0xB0000000.toInt()
+            canvas.drawLine(left, yT, right, yT, pDotted)
+            canvas.drawLine(left, yB, right, yB, pDotted)
+        }
     }
 
     private fun drawMarkers(canvas: Canvas, from: Int, to: Int, priceH: Float) {
+        val firstT = if (candles.isNotEmpty()) candles.first().t else 0L
         for (m in markers) {
-            if (m.bi < from - 2 || m.bi > to + 2) continue
-            val x = xOf(m.bi.toFloat())
+            if (m.t > 0L && m.t < firstT) continue
+            val mBi = idxOfTime(m.t, m.bi)
+            if (mBi < from - 2 || mBi > to + 2) continue
+            val x = xOf(mBi.toFloat())
             if (x < 0 || x > plotW) continue
             val y = yOf(m.price)
             if (y < -20 || y > priceH + 30) continue
@@ -1021,29 +1109,34 @@ class ChartView @JvmOverloads constructor(
         }
         for (o in overlays) {
             if (o.stage == 8) continue
-            line(o.zTop, Color.parseColor("#39B27C"), "ناحیه", o.zBi.toFloat())
-            line(o.zBot, Color.parseColor("#39B27C"), "", o.zBi.toFloat())
+            val zIdx = idxOfTime(o.zT, o.zBi).toFloat()
+            val lvIdx = idxOfTime(if (o.lvT > 0L) o.lvT else o.zT, o.zBi).toFloat()
+            val hvIdx = idxOfTime(if (o.hvT > 0L) o.hvT else o.zT, o.zBi).toFloat()
+            val armIdx = idxOfTime(if (o.armT > 0L) o.armT else if (o.hvT > 0L) o.hvT else o.zT, o.zBi).toFloat()
+            line(o.zTop, Color.parseColor("#39B27C"), "ناحیه", zIdx)
+            line(o.zBot, Color.parseColor("#39B27C"), "", zIdx)
             if (o.stage >= 4 && !o.lvUsed && o.lvConfBi >= 0) {
-                line(o.lvH, Palette.gold, "ولوم کم", o.zBi.toFloat())
-                line(o.lvL, Palette.gold, "", o.zBi.toFloat())
+                line(o.lvH, Palette.gold, "ولوم کم", lvIdx)
+                line(o.lvL, Palette.gold, "", lvIdx)
             }
             if (o.stage >= 5 && !o.hvH.isNaN()) {
-                line(o.hvH, Palette.accent, "ولوم زیاد", o.zBi.toFloat())
-                line(o.hvL, Palette.accent, "", o.zBi.toFloat())
+                line(o.hvH, Palette.accent, "ولوم زیاد", hvIdx)
+                line(o.hvL, Palette.accent, "", hvIdx)
             }
             if (o.stage >= 6) {
-                line(o.entry, upCol, "ورود", o.zBi.toFloat())
-                line(o.sl, dnCol, "حدضرر", o.zBi.toFloat())
-                line(o.tp1, Color.parseColor("#FFB74D"), "TP1", o.zBi.toFloat())
-                line(o.tp2, Color.parseColor("#FFB74D"), "TP2", o.zBi.toFloat())
-                line(o.tpx, Palette.violet, "TP نهایی", o.zBi.toFloat())
+                line(o.entry, upCol, "ورود", armIdx)
+                line(o.sl, dnCol, "حدضرر", armIdx)
+                line(o.tp1, Color.parseColor("#FFB74D"), "TP1", armIdx)
+                line(o.tp2, Color.parseColor("#FFB74D"), "TP2", armIdx)
+                line(o.tpx, Palette.violet, "TP نهایی", armIdx)
             }
         }
         val t = trades.lastOrNull { it.open } ?: trades.lastOrNull()
         if (t != null) {
-            line(t.entry, upCol, if (t.open) "ورود باز" else "ورود", t.entryBi.toFloat())
-            line(if (t.be) t.entry else t.sl0, dnCol, if (t.be) "سربه‌سر" else "حدضرر", t.entryBi.toFloat())
-            line(t.tpX, Palette.violet, "TP", t.entryBi.toFloat())
+            val tIdx = idxOfTime(t.entryT, t.entryBi).toFloat()
+            line(t.entry, upCol, if (t.open) "ورود باز" else "ورود", tIdx)
+            line(if (t.be) t.entry else t.sl0, dnCol, if (t.be) "سربه‌سر" else "حدضرر", tIdx)
+            line(t.tpX, Palette.violet, "TP", tIdx)
         }
     }
 }

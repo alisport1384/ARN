@@ -147,6 +147,57 @@ class AppSmokeTest {
     }
 
     @Test
+    fun `mode boxes and trigger 1 and 2 ranges remain fixed in memory across timeframe changes`() {
+        val s = AppState()
+        val rnd = kotlin.random.Random(42)
+        val list = ArrayList<com.alisport.goldpin.core.Candle>()
+        var px = 2000.0
+        var t = 1_700_000_000_000L
+        for (i in 0 until 12_000) {
+            val o = px; val c = px + rnd.nextDouble(-1.1, 1.1)
+            val h = maxOf(o, c) + rnd.nextDouble(0.0, 0.7)
+            val l = minOf(o, c) - rnd.nextDouble(0.0, 0.7)
+            val v = 60.0 + rnd.nextDouble(450.0) + if (i % 83 == 0) 950.0 else 0.0
+            list.add(com.alisport.goldpin.core.Candle(i, t, o, h, l, c, v))
+            px = c; t += 60_000
+        }
+        // انتخاب مود ۴ (ساختار H1، میانی M15، تریگر ۱ M5، تریگر ۲ M1)
+        s.cfg.tfMode = 4; s.cfg.tfS = Tf.H1; s.cfg.tfM = Tf.M15; s.cfg.tf1 = Tf.M5; s.cfg.tf2 = Tf.M1
+        s.chartTfSec = Tf.M1
+        s.setCandles(list, rebuildNow = true)
+
+        val snap0 = s.uiSnapshot()
+        assertTrue("باید باکس ساختار ثبت شده باشد", snap0.zones.isNotEmpty())
+        assertTrue("باید باکس تریگر ۱ در حافظه ثبت شده باشد", snap0.t1Zones.isNotEmpty())
+        assertTrue("باید باکس تریگر ۲ در حافظه ثبت شده باشد", snap0.t2Zones.isNotEmpty())
+
+        val refZones = snap0.zones.map { "${it.id}:${it.dir}:${it.idx}:${it.top}:${it.bot}:${it.createdT}:${it.endT}:${it.status}" }
+        val refT1 = snap0.t1Zones.map { "${it.id}:${it.dir}:${it.top}:${it.bot}:${it.createdT}:${it.endT}:${it.status}" }
+        val refT2 = snap0.t2Zones.map { "${it.id}:${it.dir}:${it.top}:${it.bot}:${it.createdT}:${it.endT}:${it.status}" }
+        val refSetups = snap0.setups.map { "${it.id}:${it.stage}:${it.zTop}:${it.zBot}:${it.lvH}:${it.lvL}:${it.hvH}:${it.hvL}" }
+
+        // چرخش بین تمام تایم‌فریم‌های چارت در همان مود انتخاب‌شده
+        for (tf in listOf(Tf.M5, Tf.M15, Tf.M30, Tf.H1, Tf.H4, Tf.D1, Tf.M1)) {
+            s.changeChartTf(tf, forceDownload = false)
+            val snapTf = s.uiSnapshot()
+            assertEquals("مود نباید با تغییر تایم‌فریم عوض شود", 4, s.cfg.tfMode)
+            assertEquals("ساختار مود نباید عوض شود", Tf.H1, s.cfg.tfS)
+            assertEquals("میانی مود نباید عوض شود", Tf.M15, s.cfg.tfM)
+            assertEquals("تریگر ۱ مود نباید عوض شود", Tf.M5, s.cfg.tf1)
+            assertEquals("تریگر ۲ مود نباید عوض شود", Tf.M1, s.cfg.tf2)
+            assertEquals("تایم‌فریم چارت باید به $tf تغییر کند", tf, s.chartTfSec)
+            assertEquals("باکس‌های ساختار در تایم‌فریم $tf تغییر کردند", refZones,
+                snapTf.zones.map { "${it.id}:${it.dir}:${it.idx}:${it.top}:${it.bot}:${it.createdT}:${it.endT}:${it.status}" })
+            assertEquals("باکس‌های تریگر ۱ در تایم‌فریم $tf تغییر کردند", refT1,
+                snapTf.t1Zones.map { "${it.id}:${it.dir}:${it.top}:${it.bot}:${it.createdT}:${it.endT}:${it.status}" })
+            assertEquals("باکس‌های تریگر ۲ در تایم‌فریم $tf تغییر کردند", refT2,
+                snapTf.t2Zones.map { "${it.id}:${it.dir}:${it.top}:${it.bot}:${it.createdT}:${it.endT}:${it.status}" })
+            assertEquals("محدوده‌های ستاپ‌ها در تایم‌فریم $tf تغییر کردند", refSetups,
+                snapTf.setups.map { "${it.id}:${it.stage}:${it.zTop}:${it.zBot}:${it.lvH}:${it.lvL}:${it.hvH}:${it.hvL}" })
+        }
+    }
+
+    @Test
     fun `trades and orders dialogs build`() {
         val c = Robolectric.buildActivity(MainActivity::class.java).setup()
         val act = c.get()

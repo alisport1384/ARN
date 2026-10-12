@@ -582,6 +582,8 @@ class MainActivity : Activity() {
         val snap = s.uiSnapshot()
         cv.candles = snap.candles
         cv.zones = snap.zones
+        cv.t1Zones = snap.t1Zones
+        cv.t2Zones = snap.t2Zones
         cv.markers = snap.markers
         cv.trades = snap.trades
         cv.pocPrice = snap.lastPocPx
@@ -589,8 +591,11 @@ class MainActivity : Activity() {
         cv.symbolName = s.symbol
         cv.chartTfSec = s.chartTfSec
         cv.overlays = snap.setups.map { st ->
-            SetupOverlay(st.id, st.dir, st.stage, st.zTop, st.zBot, st.lvH, st.lvL, st.hvH, st.hvL,
-                st.entry, st.sl, st.tp1, st.tp2, st.tpx, st.midRef, st.zBi, st.lvUsed, st.lvConfBi)
+            SetupOverlay(
+                st.id, st.dir, st.stage, st.zTop, st.zBot, st.lvH, st.lvL, st.hvH, st.hvL,
+                st.entry, st.sl, st.tp1, st.tp2, st.tpx, st.midRef, st.zBi, st.lvUsed, st.lvConfBi,
+                st.zT, st.midT, st.lvT, st.hvT, st.armT
+            )
         }
         cv.refresh()
 
@@ -908,7 +913,7 @@ class MainActivity : Activity() {
             v.addView(pickRow("ساختار", s.cfg.tfS) { s.cfg.tfS = it; s.rebuildAsync() })
             v.addView(pickRow("میانی", s.cfg.tfM) { s.cfg.tfM = it; s.rebuildAsync() })
             v.addView(pickRow("تریگر ۱", s.cfg.tf1) { s.cfg.tf1 = it; s.rebuildAsync() })
-            v.addView(pickRow("تریگر ۲ (چارت)", s.cfg.tf2) { s.changeChartTf(it) })
+            v.addView(pickRow("تریگر ۲ (چارت)", s.cfg.tf2) { s.setCustomTf2(it) })
         }
 
         // ── پروفایل حجم ──
