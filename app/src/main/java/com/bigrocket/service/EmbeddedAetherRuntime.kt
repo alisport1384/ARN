@@ -36,10 +36,14 @@ object EmbeddedAetherRuntime {
     /**
      * How long the engine's Psiphon stage may take to establish its own tunnel,
      * on top of the engine's own startup budget. The engine's own default for
-     * the same wait is 180 s; this adds the same again because psiphon has to
-     * connect through a tunnel that was itself just established.
+     * the same wait is 180 s; this is deliberately longer than it, because
+     * psiphon has to connect through a tunnel that was itself just established
+     * - so if the engine ever gives up on the stage while this wait is still
+     * running, the stage must outlive it, not the other way round. The engine's
+     * budget is raised to match in [studio.cluvex.aether.model.ConnectionProfile.toEnv]
+     * (AETHER_PSIPHON_READY_SECS = 300).
      */
-    private const val PSIPHON_READY_BUDGET_MS = 240_000L
+    private const val PSIPHON_READY_BUDGET_MS = 300_000L
 
     /** Poll cadence and probe timeout while waiting for that stage. */
     private const val PSIPHON_POLL_MS = 1_000L
@@ -232,7 +236,14 @@ object EmbeddedAetherRuntime {
                     AppLogger.log("Aether", "SOCKS listener ready on ${TunnelConfig.SOCKS_HOST}:${TunnelConfig.SOCKS_PORT}")
                     if (!attemptProfile.enginePsiphon) break
                     if (awaitPsiphonReady(engine, attemptProfile, startupTimeoutMs)) break
-                    // A hand-picked exit country is a hard filter on Psiphon's
+                    // The engine reports a dead stage itself (psiphon would not
+                    // start, gave no notice stream, stopped, ran out of its own
+                    // ready budget). That reason is what the user has to see,
+                    // instead of a bare "the port never opened" after minutes.
+                    val stageFailure = PsiphonEngine.snapshot().failure
+                    if (stageFailure != null) {
+                        AppLogger.log("Aether", "psiphon stage failed: $stageFailure")
+                    }                    // A hand-picked exit country is a hard filter on Psiphon's
                     // side: no server offering it right now means no tunnel at
                     // all. One retry with an automatic exit beats no connection -
                     // the user still gets out, just not from the country they
@@ -248,9 +259,16 @@ object EmbeddedAetherRuntime {
                         attemptProfile = attemptProfile.copy(enginePsiphonRegion = "")
                         continue
                     }
+                    // The engine's own line carries its timestamp and the "[-] psiphon:"
+                    // marker; the user only wants the reason behind it.
+                    val stageReason = stageFailure
+                        ?.substringAfter("[-] psiphon:", stageFailure)
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
                     error(
                         "Psiphon did not become ready on " +
-                            "${TunnelConfig.SOCKS_HOST}:${TunnelConfig.PSIPHON_SOCKS_PORT}",
+                            "${TunnelConfig.SOCKS_HOST}:${TunnelConfig.PSIPHON_SOCKS_PORT}" +
+                            (stageReason?.let { " ($it)" } ?: ""),
                     )
                 }
 
@@ -332,7 +350,10 @@ object EmbeddedAetherRuntime {
         while (System.currentTimeMillis() < deadline) {
             if (!engine.isAlive()) return false
             val snapshot = PsiphonEngine.snapshot()
-            if (snapshot.failure != null) return false
+            if (snapshot.failure != null) {
+                AppLogger.log("Aether", "psiphon stage gave up: ${snapshot.failure}")
+                return false
+            }
             if (snapshot.ready) return true
             val listening = PortProbe.isOpen(
                 TunnelConfig.SOCKS_HOST,

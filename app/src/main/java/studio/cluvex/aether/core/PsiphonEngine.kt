@@ -37,6 +37,31 @@ object PsiphonEngine {
 
     private const val TAG = "PsiphonEngine"
 
+    /**
+     * The engine's own terminal Psiphon-stage errors.
+     *
+     * Every one of them is logged by `run_chain` as `log::error!("[-] psiphon: …")`
+     * and the stage task then ends, so they mean "the stage is gone - do not keep
+     * waiting for the port". Transient psiphon complaints (a lost tunnel that is
+     * reconnecting, an unusable server entry, a console client without
+     * `-serverList`) are logged the same way but with different wording, so the
+     * match is on the engine's failure phrases and never on the `[-] psiphon:`
+     * prefix alone. Recognising them is what turns a four-minute "the port never
+     * opened" into the reason it did not.
+     */
+    private val TERMINAL_FAILURES = listOf(
+        "psiphon needs the psiphon-tunnel-core console client",
+        "psiphon config could not be written",
+        "psiphon config could not be saved",
+        "psiphon config ",
+        "psiphon state dir ",
+        "psiphon would not start",
+        "psiphon gave no notice stream",
+        "psiphon did not come up in time",
+        "psiphon stopped before it was ready",
+        "psiphon stopped:",
+    )
+
     @Volatile
     private var snap = Snapshot()
 
@@ -78,6 +103,15 @@ object PsiphonEngine {
         }
         if (line.startsWith("[-] psiphon:") || "psiphon: " in line) {
             DiagnosticsLog.w(TAG, line)
+            if (TERMINAL_FAILURES.any { it in line }) {
+                synchronized(lock) {
+                    if (!snap.ready) {
+                        DiagnosticsLog.e(TAG, "psiphon stage failed: $line")
+                        snap = snap.copy(failure = line)
+                    }
+                }
+            }
+            return
         }
     }
 

@@ -139,6 +139,9 @@
     <string name="apps_search_hint">جستجوی برنامه‌ها</string>
     <string name="apps_done">تمام</string>
     <string name="apps_loading">در حال بارگذاری برنامه‌ها…</string>
+    <string name="section_psiphon">سایفون</string>
+    <string name="psiphon_region_label">لوکیشن خروج Psiphon</string>
+    <string name="psiphon_region_help">سایفون فقط از کشور انتخاب‌شده خارج می‌شود؛ اگر الان سروری برای آن نبود، یک بار به صورت خودکار اتصال برقرار می‌شود.</string>
     <string name="section_transport">انتقال و ضد-DPI</string>
     <string name="section_routing">مسیریابی</string>
 

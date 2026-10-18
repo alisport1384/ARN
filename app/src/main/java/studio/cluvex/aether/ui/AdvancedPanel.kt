@@ -45,6 +45,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
+import studio.cluvex.aether.core.ExitRegions
 import studio.cluvex.aether.core.ShareBridge
 import studio.cluvex.aether.model.ConnectionProfile
 import studio.cluvex.aether.model.CoreLogLevel
@@ -77,6 +78,12 @@ fun AdvancedPanel(
     // True when hosted in the home-screen bottom sheet, where the card should
     // open already expanded instead of requiring an extra tap.
     startExpanded: Boolean = false,
+    // True when the selected upstream chain actually contains the engine's
+    // Psiphon stage (BigRocket's Direct + Aether + Psiphon). Without it the
+    // Psiphon group below is not drawn at all: a settings group that cannot do
+    // anything is worse than a missing one, because it invites the user to
+    // change a value that is then silently ignored.
+    psiphonActive: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(startExpanded) }
     var showAppPicker by remember { mutableStateOf(false) }
@@ -151,6 +158,30 @@ fun AdvancedPanel(
                         label = { ipLabel(it) },
                         enabled = enabled,
                     )
+
+                    // ---------- Psiphon stage (Direct + Aether + Psiphon) ----------
+                    //
+                    // First group under the connection card on purpose: it belongs
+                    // to the chain the user just chose, not to the engine tuning
+                    // further down. The value lives on the profile, so the engine
+                    // reads it from AETHER_PSIPHON_REGION at start - and it is only
+                    // ever honoured in this chain.
+                    if (psiphonActive) {
+                        SectionHeader(stringResource(R.string.section_psiphon))
+
+                        SettingLabel(stringResource(R.string.psiphon_region_label))
+                        DropdownSelector(
+                            options = ExitRegions.values,
+                            selected = profile.enginePsiphonRegion
+                                .takeIf { it in ExitRegions.values }
+                                ?: ExitRegions.values.first(),
+                            onSelect = { onProfileChange(profile.copy(enginePsiphonRegion = it)) },
+                            label = { ExitRegions.label(it) },
+                            enabled = enabled,
+                        )
+                        HelperText(stringResource(R.string.psiphon_region_help))
+                        Spacer(Modifier.height(16.dp))
+                    }
 
                     // ---------- Transport & anti-DPI ----------
                     SectionHeader(stringResource(R.string.section_transport))

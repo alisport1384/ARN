@@ -432,6 +432,23 @@ data class ConnectionProfile(
             // silently ignored by the engine.
             val region = studio.cluvex.aether.core.ExitRegions.normalize(enginePsiphonRegion)
             if (region.isNotEmpty()) put("AETHER_PSIPHON_REGION", region)
+            // The engine's own ready budget must never be shorter than the
+            // wait this app performs afterwards, otherwise the stage gives up
+            // while the app is still (correctly) waiting for it.
+            put("AETHER_PSIPHON_READY_SECS", "300")
+            // The Psiphon stage logs through the engine's own `aether::psiphon`
+            // module, and the engine's filter silences that module at the
+            // default `aether=warn`. Muted, the stage produces no ready line and
+            // no error line, so the only way a failed stage can show up is a
+            // port that never opens - which is exactly the "did not become
+            // ready" dead end this is here to prevent. Dependencies stay at
+            // info and the rest of the engine keeps the user's own level.
+            val base = if (coreLogLevel == CoreLogLevel.OFF || coreLogLevel == CoreLogLevel.ERROR) {
+                CoreLogLevel.WARN.raw
+            } else {
+                coreLogLevel.raw
+            }
+            put("RUST_LOG", "info,aether=$base,aether::psiphon=info")
         }
     }
 

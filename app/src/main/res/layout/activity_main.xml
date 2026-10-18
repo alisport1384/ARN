@@ -401,40 +401,6 @@
                     android:textSize="14sp" />
             </LinearLayout>
 
-            <!-- Exit country for the engine's Psiphon stage (Direct + Aether + Psiphon only) -->
-            <LinearLayout
-                android:id="@+id/psiphonRegionSection"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="لوکیشن خروج Psiphon"
-                    android:textColor="@color/br_text_muted"
-                    android:textSize="12sp" />
-
-                <Spinner
-                    android:id="@+id/spinnerPsiphonRegion"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/bg_br_subsurface"
-                    android:padding="10dp"
-                    android:popupBackground="@drawable/bg_br_card" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:text="Psiphon فقط از لوکیشن انتخاب‌شده خارج می‌شود؛ اگر الان سروری برای آن نبود، یک بار به صورت خودکار اتصال برقرار می‌شود."
-                    android:textColor="@color/br_text_muted"
-                    android:textSize="11sp" />
-            </LinearLayout>
         </LinearLayout>
 
     </LinearLayout>

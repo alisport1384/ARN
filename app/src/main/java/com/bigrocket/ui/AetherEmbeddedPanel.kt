@@ -31,6 +31,10 @@ fun AetherEmbeddedPanel(
     onProfileChange: (ConnectionProfile) -> Unit,
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
+    // True when the selected upstream chain carries the engine's Psiphon stage
+    // (BigRocket's Direct + Aether + Psiphon). The panel itself is used by every
+    // chain, so this is what keeps the Psiphon group out of the ones without it.
+    psiphonActive: Boolean = false,
 ) {
     Card(modifier = modifier.fillMaxWidth()) {
         AetherEmbeddedContent(
@@ -38,6 +42,7 @@ fun AetherEmbeddedPanel(
             onProfileChange = onProfileChange,
             enabled = enabled,
             onEnabledChange = onEnabledChange,
+            psiphonActive = psiphonActive,
         )
     }
 }
@@ -48,6 +53,7 @@ private fun AetherEmbeddedContent(
     onProfileChange: (ConnectionProfile) -> Unit,
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
+    psiphonActive: Boolean = false,
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         AetherHeader(
@@ -66,6 +72,7 @@ private fun AetherEmbeddedContent(
             profile = profile,
             onProfileChange = onProfileChange,
             startExpanded = true,
+            psiphonActive = psiphonActive,
         )
 
         Spacer(Modifier.height(12.dp))
@@ -125,6 +132,7 @@ private fun AetherAdvancedPanel(
     profile: ConnectionProfile,
     onProfileChange: (ConnectionProfile) -> Unit,
     startExpanded: Boolean,
+    psiphonActive: Boolean = false,
 ) {
     val state = AetherController.state.collectAsState().value
 
@@ -136,6 +144,7 @@ private fun AetherAdvancedPanel(
         onProfileChange = onProfileChange,
         enabled = !state.isBusy,
         startExpanded = startExpanded,
+        psiphonActive = psiphonActive,
     )
 }
 
