@@ -10,14 +10,18 @@
 #
 # Built by the vendored engine's own native/aether/psiphon-build.sh, which owns
 # the pinned upstream commit and the build flags - this script only decides WHICH
-# ABIs to build and where the result is installed. That is the same build the
-# engine's desktop release archives use: GOOS=linux, CGO_ENABLED=0, a fully
-# static ELF (verified locally: `file` reports a statically linked ARM aarch64 /
-# ARM EABI5 executable). Being static it carries no dynamic loader path, so it
-# runs as-is on Android's bionic - unlike a GOOS=linux build that links against
-# glibc, which is what the note in build-xray.sh warns about.
+# ABIs to build and where the result is installed.
 #
-# Requires: Go (>= the toolchain the psiphon module pins) on PATH.
+# The target OS is ANDROID, not linux, and that is the whole ballgame: Android
+# 5.0+ refuses to start a non-PIE executable, and it refuses it before the
+# process produces any output, so the engine only ever saw "psiphon stopped
+# before it was ready" for a binary that was in fact perfect on a desktop.
+# GOOS=android gives a PIE ET_DYN against bionic (see the long note in
+# psiphon-build.sh). It needs cgo, so the NDK's clang is required here too -
+# the same NDK the Rust and Xray cores already use.
+#
+# Requires: Go (>= the toolchain the psiphon module pins) on PATH, and the
+# Android NDK (ANDROID_NDK_HOME, or one of the usual SDK locations).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,11 +46,11 @@ build_abi() {
   local out="${JNI_DIR}/${abi}/libpsiphon.so"
   local tmp
   tmp="$(mktemp -d)"
-  echo "==> [psiphon] building psiphon-tunnel-core for ${abi} (linux/${goarch}${goarm:+ v${goarm}})"
+  echo "==> [psiphon] building psiphon-tunnel-core for ${abi} (android/${goarch}${goarm:+ v${goarm}})"
   if [ -n "${goarm}" ]; then
-    bash "${BUILDER}" linux "${goarch}" "${tmp}" "${goarm}"
+    bash "${BUILDER}" android "${goarch}" "${tmp}" "${goarm}"
   else
-    bash "${BUILDER}" linux "${goarch}" "${tmp}"
+    bash "${BUILDER}" android "${goarch}" "${tmp}"
   fi
   mkdir -p "${JNI_DIR}/${abi}"
   cp "${tmp}/psiphon-tunnel-core" "${out}"
