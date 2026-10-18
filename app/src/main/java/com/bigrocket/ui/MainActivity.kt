@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import studio.cluvex.aether.data.ProfileStore
 import studio.cluvex.aether.model.ConnectionProfile
+import studio.cluvex.aether.core.ExitRegions
 import com.bigrocket.service.EmbeddedAetherRuntime
 import com.bigrocket.service.XrayConfigBuilder
 import com.bigrocket.service.XrayConfigStore
@@ -75,6 +76,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var xrayConfigSection: LinearLayout
     private lateinit var etXrayConfig: android.widget.EditText
     private lateinit var btnSaveXrayConfig: Button
+    private lateinit var psiphonRegionSection: LinearLayout
+    private lateinit var spinnerPsiphonRegion: Spinner
     private lateinit var toolbar: Toolbar
     private var upstreamChoice = UpstreamChoice.NONE
     // Backed by Compose state (not a plain var): AetherEmbeddedPanel reads this inside
@@ -173,6 +176,8 @@ class MainActivity : AppCompatActivity() {
         xrayConfigSection = findViewById(R.id.xrayConfigSection)
         etXrayConfig = findViewById(R.id.etXrayConfig)
         btnSaveXrayConfig = findViewById(R.id.btnSaveXrayConfig)
+        psiphonRegionSection = findViewById(R.id.psiphonRegionSection)
+        spinnerPsiphonRegion = findViewById(R.id.spinnerPsiphonRegion)
         setupXrayConfigControls()
     }
 
@@ -316,7 +321,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            aetherProfileStore.profile.collectLatest { aetherProfile = it.copy(proxyMode = true) }
+            aetherProfileStore.profile.collectLatest { stored ->
+                aetherProfile = stored.copy(proxyMode = true)
+                // The stored exit country can also change from the engine side
+                // (a region that could not be served is not written back, but a
+                // reinstall or another writer can), so re-sync the row. Guarded by
+                // the position check because a Spinner fires a phantom
+                // onItemSelected on every setSelection.
+                val wanted = regionPositionFor(aetherProfile.enginePsiphonRegion)
+                if (spinnerPsiphonRegion.selectedItemPosition != wanted) {
+                    spinnerPsiphonRegion.setSelection(wanted, false)
+                }
+            }
         }
 
 
@@ -346,7 +362,43 @@ class MainActivity : AppCompatActivity() {
                 setUpstreamChoice(selected)
             }
         }
+        setupPsiphonRegionSpinner()
         renderUpstreamChoice()
+    }
+
+    /**
+     * Exit country for the engine's Psiphon stage. Its own section is only shown
+     * for Direct + Aether + Psiphon (see [renderUpstreamChoice]): a country picker
+     * for a mode that ignores it would be a knob that does nothing.
+     *
+     * The selection is stored in the Aether profile itself, next to enginePsiphon,
+     * so the engine gets it through the same environment the rest of its Psiphon
+     * settings travel in - one source of truth, no second store to keep in sync.
+     */
+    private fun setupPsiphonRegionSpinner() {
+        val codes = ExitRegions.values
+        val labels = codes.map { ExitRegions.label(it) }
+        spinnerPsiphonRegion.adapter =
+            ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+        spinnerPsiphonRegion.setSelection(regionPositionFor(aetherProfile.enginePsiphonRegion), false)
+        spinnerPsiphonRegion.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val code = codes.getOrElse(position) { "" }
+                if (ExitRegions.normalize(aetherProfile.enginePsiphonRegion) == code) return
+                val updated = aetherProfile.copy(enginePsiphonRegion = code)
+                aetherProfile = updated
+                AppLogger.log("Upstream", "psiphon exit region -> ${ExitRegions.name(code)}")
+                lifecycleScope.launch { aetherProfileStore.save(updated) }
+            }
+        }
+    }
+
+    /** Position of [code] in the exit-country list; unknown codes fall back to automatic. */
+    private fun regionPositionFor(code: String): Int {
+        val normalized = ExitRegions.normalize(code)
+        val index = ExitRegions.values.indexOf(normalized)
+        return if (index >= 0) index else 0
     }
 
     /**
@@ -413,6 +465,9 @@ class MainActivity : AppCompatActivity() {
             upstreamChoice == UpstreamChoice.AETHER_XRAY ||
             upstreamChoice == UpstreamChoice.XRAY_AETHER
         xrayConfigSection.visibility = if (usesXray) View.VISIBLE else View.GONE
+        // Exit country: only the mode whose engine actually spawns Psiphon.
+        psiphonRegionSection.visibility =
+            if (upstreamChoice == UpstreamChoice.AETHER_PSIPHON) View.VISIBLE else View.GONE
     }
 
 

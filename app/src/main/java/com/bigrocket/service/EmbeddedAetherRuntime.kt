@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import studio.cluvex.aether.core.AetherController
 import studio.cluvex.aether.core.AetherProcess
 import studio.cluvex.aether.core.DiagnosticsLog
+import studio.cluvex.aether.core.ExitRegions
 import studio.cluvex.aether.core.EngineMeta
 import studio.cluvex.aether.core.PortProbe
 import studio.cluvex.aether.core.NetProbe
@@ -183,114 +184,80 @@ object EmbeddedAetherRuntime {
                     "starting engine: upstream=socks5://127.0.0.1:$upstreamPort " +
                         "protocol=${embeddedProfile.protocol} h2=${embeddedProfile.masqueHttp2} " +
                         "scan=${embeddedProfile.scanMode} endpoint=${embeddedProfile.endpointMode}" +
-                        (if (embeddedProfile.enginePsiphon) " psiphon=chain" else ""),
+                        (if (embeddedProfile.enginePsiphon) {
+                            " psiphon=chain exit=${ExitRegions.name(embeddedProfile.enginePsiphonRegion)}"
+                        } else {
+                            ""
+                        }),
                 )
-                // Direct + Aether + Psiphon: the trust store, the embedded server
-                // list and the config overlay the engine's Psiphon stage needs.
-                // The engine itself reads them from the environment it is started
-                // with, so they must be on disk before the launch below.
-                if (embeddedProfile.enginePsiphon) {
-                    PsiphonBootstrap.prepare(app)
-                }
-                val engine = AetherProcess(app.applicationInfo.nativeLibraryDir, app.filesDir)
-                process = engine
-                engine.start(embeddedProfile)
-                AetherController.setState(ConnectionState.Connecting)
-                // GOOL establishes two sequential WireGuard layers before the
-                // native SOCKS5 listener is created. Use the protocol's full
-                // startup budget here instead of failing while the inner tunnel
-                // is still legitimately being established.
-                val startupTimeoutMs = embeddedProfile.connectTimeoutMs().coerceAtLeast(10_000L)
-                // NOTE: embeddedProfile.upstreamProxy ("socks5://127.0.0.1:${BondingSocksServer.PORT}")
-                // is where Aether sends ITS OWN outbound traffic (the --upstream target).
-                // It is unrelated to the port Aether exposes ITS OWN SOCKS5 relay on for us
-                // to consume — that is always the fixed TunnelConfig.SOCKS_PORT (1819).
-                // Probing BondingSocksServer's port here always returns "open" immediately
-                // (it's up from VPN start), which made every protocol falsely report
-                // Connected before Aether's tunnel was actually ready.
-                val open = PortProbe.awaitOpen(
-                    TunnelConfig.SOCKS_HOST,
-                    TunnelConfig.SOCKS_PORT,
-                    startupTimeoutMs,
-                    isEngineAlive = { engine.isAlive() },
-                )
-                if (!open) {
-                    AppLogger.log(
-                        "Aether",
-                        "SOCKS listener NOT ready after ${startupTimeoutMs}ms " +
-                            "(engineAlive=${engine.isAlive()}) - giving up this attempt",
-                    )
-                    error("Aether SOCKS5 listener did not become ready")
-                }
-                AppLogger.log("Aether", "SOCKS listener ready on ${TunnelConfig.SOCKS_HOST}:${TunnelConfig.SOCKS_PORT}")
-
-                // Direct + Aether + Psiphon: the engine has spawned
-                // psiphon-tunnel-core and pointed it at the engine's own SOCKS5
-                // listener as its upstream, so psiphon's servers are dialled
-                // through the tunnel. The client's listener is the chain's entry
-                // point from here on.
-                //
-                // Readiness is established functionally, not from a log line:
-                // the listener must accept AND actually proxy a TCP connection
-                // through the tunnel underneath it. A bare port probe goes green
-                // while psiphon is still hunting for a server, which is exactly
-                // the "connected but nothing loads" state this chain must not
-                // publish as ready. The engine's own ready line is honoured too
-                // when the log level happens to expose it.
-                if (embeddedProfile.enginePsiphon) {
-                    val psiphonDeadline =
-                        System.currentTimeMillis() + startupTimeoutMs + PSIPHON_READY_BUDGET_MS
-                    var psiphonReady = false
-                    while (System.currentTimeMillis() < psiphonDeadline) {
-                        if (!engine.isAlive()) break
-                        if (PsiphonEngine.snapshot().failure != null) break
-                        if (PsiphonEngine.snapshot().ready) {
-                            psiphonReady = true
-                            break
-                        }
-                        val listening = PortProbe.isOpen(
-                            TunnelConfig.SOCKS_HOST,
-                            TunnelConfig.PSIPHON_SOCKS_PORT,
-                            PSIPHON_PROBE_TIMEOUT_MS,
-                        )
-                        if (listening &&
-                            NetProbe.checkTcpViaProxy(
-                                TunnelConfig.SOCKS_HOST,
-                                TunnelConfig.PSIPHON_SOCKS_PORT,
-                                PSIPHON_PROBE_IP,
-                                PSIPHON_PROBE_PORT,
-                                PSIPHON_PROBE_TIMEOUT_MS,
-                            )
-                        ) {
-                            psiphonReady = true
-                            break
-                        }
-                        delay(PSIPHON_POLL_MS)
+                var attemptProfile = embeddedProfile
+                var engine: AetherProcess
+                while (true) {
+                    if (attemptProfile.enginePsiphon) {
+                        // Re-staged on every attempt: a retry without a region is
+                        // a new config, and the trust store must already be on
+                        // disk before the engine spawns its Psiphon stage.
+                        PsiphonBootstrap.prepare(app)
                     }
-                    if (!psiphonReady) {
-                        val snapshot = PsiphonEngine.snapshot()
+                    engine = AetherProcess(app.applicationInfo.nativeLibraryDir, app.filesDir)
+                    process = engine
+                    engine.start(attemptProfile)
+                    AetherController.setState(ConnectionState.Connecting)
+                    // GOOL establishes two sequential WireGuard layers before the
+                    // native SOCKS5 listener is created. Use the protocol's full
+                    // startup budget here instead of failing while the inner tunnel
+                    // is still legitimately being established.
+                    val startupTimeoutMs = attemptProfile.connectTimeoutMs().coerceAtLeast(10_000L)
+                    // NOTE: embeddedProfile.upstreamProxy ("socks5://127.0.0.1:${BondingSocksServer.PORT}")
+                    // is where Aether sends ITS OWN outbound traffic (the --upstream target).
+                    // It is unrelated to the port Aether exposes ITS OWN SOCKS5 relay on for us
+                    // to consume — that is always the fixed TunnelConfig.SOCKS_PORT (1819).
+                    // Probing BondingSocksServer's port here always returns "open" immediately
+                    // (it's up from VPN start), which made every protocol falsely report
+                    // Connected before Aether's tunnel was actually ready.
+                    val open = PortProbe.awaitOpen(
+                        TunnelConfig.SOCKS_HOST,
+                        TunnelConfig.SOCKS_PORT,
+                        startupTimeoutMs,
+                        isEngineAlive = { engine.isAlive() },
+                    )
+                    if (!open) {
                         AppLogger.log(
                             "Aether",
-                            "psiphon stage not ready within " +
-                                "${startupTimeoutMs + PSIPHON_READY_BUDGET_MS}ms " +
-                                "(engineAlive=${engine.isAlive()} failure=${snapshot.failure}) " +
-                                "- giving up this attempt",
+                            "SOCKS listener NOT ready after ${startupTimeoutMs}ms " +
+                                "(engineAlive=${engine.isAlive()}) - giving up this attempt",
                         )
-                        error(
-                            "Psiphon did not become ready on " +
-                                "${TunnelConfig.SOCKS_HOST}:${TunnelConfig.PSIPHON_SOCKS_PORT}",
-                        )
+                        error("Aether SOCKS5 listener did not become ready")
                     }
-                    AppLogger.log(
-                        "Aether",
-                        "psiphon SOCKS5 ready on ${TunnelConfig.SOCKS_HOST}:${TunnelConfig.PSIPHON_SOCKS_PORT}",
+                    AppLogger.log("Aether", "SOCKS listener ready on ${TunnelConfig.SOCKS_HOST}:${TunnelConfig.SOCKS_PORT}")
+                    if (!attemptProfile.enginePsiphon) break
+                    if (awaitPsiphonReady(engine, attemptProfile, startupTimeoutMs)) break
+                    // A hand-picked exit country is a hard filter on Psiphon's
+                    // side: no server offering it right now means no tunnel at
+                    // all. One retry with an automatic exit beats no connection -
+                    // the user still gets out, just not from the country they
+                    // picked, and the log says so plainly.
+                    val wanted = ExitRegions.normalize(attemptProfile.enginePsiphonRegion)
+                    if (wanted.isNotEmpty()) {
+                        AppLogger.log(
+                            "Aether",
+                            "psiphon has no exit in ${ExitRegions.name(wanted)} right now - " +
+                                "retrying once with an automatic exit",
+                        )
+                        stopInternal()
+                        attemptProfile = attemptProfile.copy(enginePsiphonRegion = "")
+                        continue
+                    }
+                    error(
+                        "Psiphon did not become ready on " +
+                            "${TunnelConfig.SOCKS_HOST}:${TunnelConfig.PSIPHON_SOCKS_PORT}",
                     )
                 }
 
                 AetherController.setState(ConnectionState.Verifying)
                 AetherController.setIpLoading(true)
                 val chainHost = TunnelConfig.SOCKS_HOST
-                val chainPort = if (embeddedProfile.enginePsiphon) {
+                val chainPort = if (attemptProfile.enginePsiphon) {
                     TunnelConfig.PSIPHON_SOCKS_PORT
                 } else {
                     TunnelConfig.SOCKS_PORT
@@ -336,6 +303,69 @@ object EmbeddedAetherRuntime {
      * True when the live engine's own outbound no longer chains through the SOCKS
      * port the desired chain requires, so the caller must stop() before start().
      */
+    /**
+     * Waits until the engine's Psiphon stage is usable.
+     *
+     * Readiness is established functionally, not from a log line: the client's
+     * SOCKS5 listener must accept AND actually proxy a TCP connection through the
+     * tunnel underneath it. A bare port probe goes green while psiphon is still
+     * hunting for a server, which is exactly the "connected but nothing loads"
+     * state this chain must not publish as ready. The engine's own ready line is
+     * honoured too, for the log levels that expose it.
+     *
+     * Returns false when the engine dies, the client reports a failure, or the
+     * budget runs out.
+     */
+    private suspend fun awaitPsiphonReady(
+        engine: AetherProcess,
+        profile: ConnectionProfile,
+        startupTimeoutMs: Long,
+    ): Boolean {
+        val wanted = ExitRegions.normalize(profile.enginePsiphonRegion)
+        if (wanted.isNotEmpty()) {
+            DiagnosticsLog.i(
+                "Aether",
+                "psiphon is asked to leave from ${ExitRegions.name(wanted)}",
+            )
+        }
+        val deadline = System.currentTimeMillis() + startupTimeoutMs + PSIPHON_READY_BUDGET_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (!engine.isAlive()) return false
+            val snapshot = PsiphonEngine.snapshot()
+            if (snapshot.failure != null) return false
+            if (snapshot.ready) return true
+            val listening = PortProbe.isOpen(
+                TunnelConfig.SOCKS_HOST,
+                TunnelConfig.PSIPHON_SOCKS_PORT,
+                PSIPHON_PROBE_TIMEOUT_MS,
+            )
+            if (listening &&
+                NetProbe.checkTcpViaProxy(
+                    TunnelConfig.SOCKS_HOST,
+                    TunnelConfig.PSIPHON_SOCKS_PORT,
+                    PSIPHON_PROBE_IP,
+                    PSIPHON_PROBE_PORT,
+                    PSIPHON_PROBE_TIMEOUT_MS,
+                )
+            ) {
+                AppLogger.log(
+                    "Aether",
+                    "psiphon SOCKS5 ready on ${TunnelConfig.SOCKS_HOST}:${TunnelConfig.PSIPHON_SOCKS_PORT}" +
+                        (if (wanted.isNotEmpty()) " (exit=${ExitRegions.name(wanted)})" else ""),
+                )
+                return true
+            }
+            delay(PSIPHON_POLL_MS)
+        }
+        val snapshot = PsiphonEngine.snapshot()
+        AppLogger.log(
+            "Aether",
+            "psiphon stage not ready within ${startupTimeoutMs + PSIPHON_READY_BUDGET_MS}ms " +
+                "(engineAlive=${engine.isAlive()} failure=${snapshot.failure})",
+        )
+        return false
+    }
+
     fun needsRestart(upstreamPort: Int): Boolean = isRunning() && upstreamPort != activeUpstreamPort
 
     /**

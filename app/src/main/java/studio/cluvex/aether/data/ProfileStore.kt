@@ -71,6 +71,7 @@ class ProfileStore(private val context: Context) {
         val routeSniffMs = intPreferencesKey("routeSniffMs")
         val autoReprovision = booleanPreferencesKey("autoReprovision")
         val enginePsiphon = booleanPreferencesKey("enginePsiphon")
+        val enginePsiphonRegion = stringPreferencesKey("enginePsiphonRegion")
     }
 
     /**
@@ -141,6 +142,7 @@ class ProfileStore(private val context: Context) {
             routeSniffMs = prefs[Keys.routeSniffMs] ?: 0,
             autoReprovision = prefs[Keys.autoReprovision] ?: true,
             enginePsiphon = prefs[Keys.enginePsiphon] ?: false,
+            enginePsiphonRegion = prefs[Keys.enginePsiphonRegion] ?: "",
         )
     }
 
@@ -190,6 +192,7 @@ class ProfileStore(private val context: Context) {
             prefs[Keys.routeSniffMs] = profile.routeSniffMs
             prefs[Keys.autoReprovision] = profile.autoReprovision
             prefs[Keys.enginePsiphon] = profile.enginePsiphon
+            prefs[Keys.enginePsiphonRegion] = profile.enginePsiphonRegion
         }
         // Secrets go to the Keystore-sealed store, never to the prefs file.
         secrets.write(SecretStore.ACCESS_SECRET, profile.accessClientSecret)

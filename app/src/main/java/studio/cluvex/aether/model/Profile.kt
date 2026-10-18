@@ -221,6 +221,17 @@ data class ConnectionProfile(
      */
     val enginePsiphon: Boolean = false,
 
+    /**
+     * Exit country for the engine's Psiphon stage (Direct + Aether + Psiphon),
+     * an ISO 3166-1 alpha-2 code or "" for automatic. See [ExitRegions] for the
+     * offered list and for why a hard filter is a promise the caller has to keep.
+     *
+     * Psiphon treats a named region as a hard filter, so a region with no usable
+     * server right now produces no tunnel at all - EmbeddedAetherRuntime falls
+     * back to an automatic exit instead of failing the whole mode.
+     */
+    val enginePsiphonRegion: String = "",
+
 ) {
     /** True when a Zero Trust organization is configured and usable. */
     val hasTeam: Boolean
@@ -416,6 +427,11 @@ data class ConnectionProfile(
         if (enginePsiphon) {
             put("AETHER_PSIPHON", "chain")
             put("AETHER_PSIPHON_BIND", "127.0.0.1:${studio.cluvex.aether.core.TunnelConfig.PSIPHON_SOCKS_PORT}")
+            // Only a two-letter code is honoured by the engine; anything else is
+            // dropped here so a typo degrades to "automatic" instead of being
+            // silently ignored by the engine.
+            val region = studio.cluvex.aether.core.ExitRegions.normalize(enginePsiphonRegion)
+            if (region.isNotEmpty()) put("AETHER_PSIPHON_REGION", region)
         }
     }
 
