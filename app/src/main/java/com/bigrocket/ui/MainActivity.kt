@@ -76,11 +76,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etXrayConfig: android.widget.EditText
     private lateinit var btnSaveXrayConfig: Button
     private lateinit var toolbar: Toolbar
-    // Backed by Compose state, for the same reason aetherProfile is: the Aether
-    // panel lives in a ComposeView and reads this to decide whether to draw the
-    // Psiphon group at all. As a plain var a mode switch left that row on screen
-    // - or missing - until some unrelated state happened to force a recomposition.
-    private var upstreamChoice by mutableStateOf(UpstreamChoice.NONE)
+    private var upstreamChoice = UpstreamChoice.NONE
+    // Compose-visible mirror of upstreamChoice, kept in step wherever it changes.
+    // A plain var triggers no recomposition, and the Aether panel lives in a
+    // ComposeView: without this the Psiphon group would stay on screen - or stay
+    // missing - after a mode switch until some unrelated state recomposed it.
+    // Held as an explicit MutableState rather than a `by` delegate, because the
+    // delegate would generate a setUpstreamChoice setter that clashes with the
+    // private method of the same name below.
+    private val upstreamChoiceState = mutableStateOf(upstreamChoice)
     // Backed by Compose state (not a plain var): AetherEmbeddedPanel reads this inside
     // aetherEmbeddedPanel.setContent{}, so a plain var mutation here was invisible to Compose -
     // onProfileChange updated the value but nothing recomposed, making every Advanced-panel
@@ -137,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         // SharedPreferences (synchronous read) on purpose: an async DataStore read would
         // reintroduce a window where the default is still visible.
         upstreamChoice = loadUpstreamChoice()
+        upstreamChoiceState.value = upstreamChoice
         initViews()
         setSupportActionBar(toolbar)
         setupUpstreamIntegration()
@@ -296,7 +301,7 @@ class MainActivity : AppCompatActivity() {
                             lifecycleScope.launch { aetherProfileStore.save(profile) }
                         },
                         enabled = aetherRuntimeEnabled,
-                        psiphonActive = upstreamChoice == UpstreamChoice.AETHER_PSIPHON,
+                        psiphonActive = upstreamChoiceState.value == UpstreamChoice.AETHER_PSIPHON,
                         onEnabledChange = { selected ->
                             // Inside the combined chains this toggle only governs the Aether
                             // stage: off collapses Direct+Aether+Xray / Direct+Xray+Aether to
@@ -368,6 +373,7 @@ class MainActivity : AppCompatActivity() {
         if (upstreamChoice == choice) return
         AppLogger.log("Upstream", "switching $upstreamChoice -> $choice")
         upstreamChoice = choice
+        upstreamChoiceState.value = choice
         saveUpstreamChoice(choice)
         renderUpstreamChoice()
         // Keep the mode spinner consistent when the choice changes from somewhere else
