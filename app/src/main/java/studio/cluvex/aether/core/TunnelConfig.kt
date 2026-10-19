@@ -16,16 +16,6 @@ object TunnelConfig {
     const val SOCKS_HOST = "127.0.0.1"
     const val SOCKS_PORT = 1819
 
-    /**
-     * Local SOCKS5 proxy the psiphon-tunnel-core client exposes in the
-     * "Direct + Aether + Psiphon" chain: the Aether engine spawns the client
-     * (AETHER_PSIPHON=chain) and binds it here with AETHER_PSIPHON_BIND. The
-     * client dials its own servers through the engine's tunnel, so this
-     * listener is the chain's entry point for relayed traffic - and it is a
-     * full SOCKS5 proxy, UDP ASSOCIATE included.
-     */
-    const val PSIPHON_SOCKS_PORT = 1827
-
     /** Point-to-point TUN addressing (matches hev tunnel.ipv4 / tunnel.ipv6). */
     const val TUN_IPV4 = "10.10.14.1"
     const val TUN_IPV4_PREFIX = 30

@@ -139,9 +139,6 @@
     <string name="apps_search_hint">Search apps</string>
     <string name="apps_done">Done</string>
     <string name="apps_loading">Loading apps\u2026</string>
-    <string name="section_psiphon">Psiphon</string>
-    <string name="psiphon_region_label">Psiphon exit country</string>
-    <string name="psiphon_region_help">Psiphon only exits from the chosen country. If no server there is reachable right now, it connects once automatically so the tunnel still comes up.</string>
     <string name="section_transport">Transport &amp; anti-DPI</string>
     <string name="section_routing">Routing</string>
 

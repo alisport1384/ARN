@@ -83,14 +83,6 @@ class UdpRelayEngine(
                 val aetherAssociation = when (mode) {
                     UpstreamMode.AETHER -> AetherUpstream.openUdp(vpnService)
                     UpstreamMode.XRAY -> AetherUpstream.openUdp(vpnService, proxyPort = EmbeddedXrayRuntime.SOCKS_PORT)
-                    // Direct + Aether + Psiphon: psiphon-tunnel-core's own SOCKS5
-                    // listener. It is a full SOCKS5 proxy, UDP ASSOCIATE included,
-                    // and its UDP flows are multiplexed over the same tunnel its
-                    // TCP flows use.
-                    UpstreamMode.PSIPHON -> AetherUpstream.openUdp(
-                        vpnService,
-                        proxyPort = studio.cluvex.aether.core.TunnelConfig.PSIPHON_SOCKS_PORT,
-                    )
                     UpstreamMode.NONE -> null
                 }
                 session = UdpSession(socket, targetNetwork, aetherAssociation, System.currentTimeMillis())

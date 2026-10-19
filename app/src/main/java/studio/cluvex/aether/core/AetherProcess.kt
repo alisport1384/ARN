@@ -32,45 +32,6 @@ class AetherProcess(
             put("TMPDIR", workingDir.absolutePath)
         }
 
-        // ---- Psiphon stage (Direct + Aether + Psiphon) ---------------------
-        //
-        // The engine runs psiphon-tunnel-core itself; on Android only files
-        // packaged in jniLibs may be executed, so the client ships as
-        // libpsiphon.so and is named explicitly, and its datastore gets a
-        // persistent directory of its own.
-        //
-        // Nothing here runs unless the profile asks for it, so every other
-        // chain keeps the engine's psiphon-off default untouched.
-        if (profile.enginePsiphon) {
-            builder.environment().apply {
-                val psiphonDir = PsiphonBootstrap.dir(workingDir).apply { mkdirs() }
-                put("AETHER_PSIPHON_DIR", psiphonDir.absolutePath)
-                // ROOT-CAUSE FIX (the reason this mode needs PsiphonBootstrap at
-                // all): a trust store and an embedded server list. Without them
-                // the static-linux console client cannot verify any certificate
-                // on Android and has no server to dial, so the stage would sit
-                // there and never connect. See [PsiphonBootstrap]; the caller
-                // stages those files with PsiphonBootstrap.prepare() before
-                // start().
-                putAll(PsiphonBootstrap.env(workingDir))
-                val psiphonBin = File(nativeLibDir, "libpsiphon.so")
-                if (psiphonBin.exists()) {
-                    put("AETHER_PSIPHON_BIN", psiphonBin.absolutePath)
-                } else {
-                    DiagnosticsLog.w(
-                        "engine",
-                        "No libpsiphon.so in this APK: the engine's Psiphon cannot start.",
-                    )
-                }
-            }
-            // The client's notices reach us through the engine's stdout, and a
-            // previous session's would still be sitting in the snapshot.
-            PsiphonEngine.reset()
-            // A SIGKILLed engine leaves its psiphon child holding the SOCKS
-            // listener, and the next launch's client then cannot bind it.
-            reapPsiphonOrphans()
-        }
-
         val proc = builder.start()
         process = proc
 
@@ -91,9 +52,6 @@ class AetherProcess(
                         // Desktop-parity info row: pick out the endpoint the
                         // engine selected (no-op for every other line).
                         EngineMeta.ingest(it)
-                        // The engine's Psiphon stage reports its readiness on
-                        // the same stream (no-op for every other line).
-                        PsiphonEngine.ingest(it)
                     }
                 }
             } catch (_: Exception) {
@@ -160,22 +118,6 @@ class AetherProcess(
             // here.
             if (!proc.waitFor(GRACEFUL_EXIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
                 proc.destroyForcibly()
-            }
-        }
-    }
-
-    /** Kills psiphon-tunnel-core processes of this app left behind by an earlier engine. */
-    private fun reapPsiphonOrphans() {
-        runCatching {
-            val self = android.os.Process.myPid()
-            File("/proc").listFiles()?.forEach { dir ->
-                val pid = dir.name.toIntOrNull() ?: return@forEach
-                if (pid == self) return@forEach
-                val cmd = runCatching { File(dir, "cmdline").readText() }.getOrNull() ?: return@forEach
-                if (cmd.contains("libpsiphon.so")) {
-                    android.os.Process.killProcess(pid)
-                    DiagnosticsLog.w("engine", "Stopped a leftover Psiphon process ($pid).")
-                }
             }
         }
     }

@@ -204,34 +204,6 @@ data class ConnectionProfile(
      */
     val autoReprovision: Boolean = true,
 
-    // ---- Added for the "Direct + Aether + Psiphon" mode ----
-
-    /**
-     * Have the engine run its own Psiphon stage on top of its tunnel
-     * (`AETHER_PSIPHON=chain`, core 2.3.0). Off means the engine never spawns
-     * psiphon-tunnel-core, which is the behaviour of every other mode.
-     *
-     * The engine owns the process: it starts psiphon-tunnel-core, points it at
-     * the engine's own SOCKS5 listener as its upstream (so psiphon's servers
-     * are dialled through the tunnel), and binds the client's SOCKS5 listener
-     * on [studio.cluvex.aether.core.TunnelConfig.PSIPHON_SOCKS_PORT]. The
-     * client's trust store, embedded server list and config overlay are
-     * prepared by [studio.cluvex.aether.core.PsiphonBootstrap]; the binary
-     * itself is named by AetherProcess.
-     */
-    val enginePsiphon: Boolean = false,
-
-    /**
-     * Exit country for the engine's Psiphon stage (Direct + Aether + Psiphon),
-     * an ISO 3166-1 alpha-2 code or "" for automatic. See [ExitRegions] for the
-     * offered list and for why a hard filter is a promise the caller has to keep.
-     *
-     * Psiphon treats a named region as a hard filter, so a region with no usable
-     * server right now produces no tunnel at all - EmbeddedAetherRuntime falls
-     * back to an automatic exit instead of failing the whole mode.
-     */
-    val enginePsiphonRegion: String = "",
-
 ) {
     /** True when a Zero Trust organization is configured and usable. */
     val hasTeam: Boolean
@@ -416,40 +388,6 @@ data class ConnectionProfile(
         // CLI argument: any local app can read /proc/<pid>/cmdline of a process
         // it can see, but not that process's environment block.
         sanitizedUpstream()?.let { put("AETHER_UPSTREAM", it) }
-
-        // ---- Psiphon stage (Direct + Aether + Psiphon) ----
-        //
-        // Only ever emitted for the mode that wants it: the engine's default is
-        // psiphon off, and no other chain is allowed to grow a Psiphon stage by
-        // accident. The bind address is stated explicitly so the client's
-        // SOCKS5 listener always lands on the port the relay engines dial,
-        // instead of on the engine's own default.
-        if (enginePsiphon) {
-            put("AETHER_PSIPHON", "chain")
-            put("AETHER_PSIPHON_BIND", "127.0.0.1:${studio.cluvex.aether.core.TunnelConfig.PSIPHON_SOCKS_PORT}")
-            // Only a two-letter code is honoured by the engine; anything else is
-            // dropped here so a typo degrades to "automatic" instead of being
-            // silently ignored by the engine.
-            val region = studio.cluvex.aether.core.ExitRegions.normalize(enginePsiphonRegion)
-            if (region.isNotEmpty()) put("AETHER_PSIPHON_REGION", region)
-            // The engine's own ready budget must never be shorter than the
-            // wait this app performs afterwards, otherwise the stage gives up
-            // while the app is still (correctly) waiting for it.
-            put("AETHER_PSIPHON_READY_SECS", "300")
-            // The Psiphon stage logs through the engine's own `aether::psiphon`
-            // module, and the engine's filter silences that module at the
-            // default `aether=warn`. Muted, the stage produces no ready line and
-            // no error line, so the only way a failed stage can show up is a
-            // port that never opens - which is exactly the "did not become
-            // ready" dead end this is here to prevent. Dependencies stay at
-            // info and the rest of the engine keeps the user's own level.
-            val base = if (coreLogLevel == CoreLogLevel.OFF || coreLogLevel == CoreLogLevel.ERROR) {
-                CoreLogLevel.WARN.raw
-            } else {
-                coreLogLevel.raw
-            }
-            put("RUST_LOG", "info,aether=$base,aether::psiphon=info")
-        }
     }
 
     /**

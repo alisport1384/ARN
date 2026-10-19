@@ -266,12 +266,6 @@ class BigRocketVpnService : VpnService(), NetworkMonitor.NetworkStateListener {
             UpstreamMode.XRAY to (aetherReady && xrayReady)
         EmbeddedAetherRuntime.UpstreamChoice.XRAY_AETHER ->
             UpstreamMode.AETHER to (aetherReady && xrayReady)
-        // Direct + Aether + Psiphon: the psiphon-tunnel-core client the engine
-        // spawns is the chain entry point, and Aether's readiness now means the
-        // whole chain (psiphon included) is up - EmbeddedAetherRuntime only
-        // reports trafficReady after psiphon's own SOCKS5 listener is serving.
-        EmbeddedAetherRuntime.UpstreamChoice.AETHER_PSIPHON ->
-            UpstreamMode.PSIPHON to aetherReady
     }
 
     /**
@@ -356,14 +350,9 @@ class BigRocketVpnService : VpnService(), NetworkMonitor.NetworkStateListener {
     private fun applyUpstreamModeLocked(chainReady: Boolean, chainMode: UpstreamMode) {
         val wantHev = chainReady && chainMode != UpstreamMode.NONE && HevTunnel.isAvailable()
         // hev forwards everything to exactly ONE local SOCKS target - the entry point
-        // of the active chain: Xray's listener for both Xray chains, Aether's
-        // otherwise, and the psiphon-tunnel-core listener the engine spawns in
-        // Direct + Aether + Psiphon.
-        val hevSocksPort = when (chainMode) {
-            UpstreamMode.XRAY -> EmbeddedXrayRuntime.SOCKS_PORT
-            UpstreamMode.PSIPHON -> TunnelConfig.PSIPHON_SOCKS_PORT
-            else -> TunnelConfig.SOCKS_PORT
-        }
+        // of the active chain: Xray's listener for both Xray chains, Aether's otherwise.
+        val hevSocksPort =
+            if (chainMode == UpstreamMode.XRAY) EmbeddedXrayRuntime.SOCKS_PORT else TunnelConfig.SOCKS_PORT
         if (wantHev == usingHevEngine && (!usingHevEngine || hevSocksPort == activeHevSocksPort)) {
             // Same engine as before: for the JVM router this still needs the mode flag
             // applied (chain mode when ready but hev unavailable, e.g. native bridge failed
@@ -720,19 +709,6 @@ class BigRocketVpnService : VpnService(), NetworkMonitor.NetworkStateListener {
                     startAetherIfNeeded(upstreamPort = EmbeddedXrayRuntime.SOCKS_PORT)
                 }
             }
-            EmbeddedAetherRuntime.UpstreamChoice.AETHER_PSIPHON -> {
-                // Direct + Aether + Psiphon: the engine's Psiphon stage is not a
-                // second process of ours - it is spawned by the engine itself,
-                // chained to the engine's own SOCKS5 listener. So there is no
-                // second stage to launch or order: starting Aether with
-                // enginePsiphon brings the whole chain up, and Aether's
-                // trafficReady only flips once psiphon's listener is serving.
-                stopXrayIfRunning("choice=AETHER_PSIPHON")
-                if (EmbeddedAetherRuntime.needsRestart(BondingSocksServer.PORT, enginePsiphon = true)) {
-                    stopAetherIfRunning("stale upstream chain")
-                }
-                startAetherIfNeeded(enginePsiphon = true)
-            }
             EmbeddedAetherRuntime.UpstreamChoice.NONE -> {
                 stopXrayIfRunning("choice=NONE")
                 stopAetherIfRunning("choice=NONE")
@@ -740,17 +716,10 @@ class BigRocketVpnService : VpnService(), NetworkMonitor.NetworkStateListener {
         }
     }
 
-    private suspend fun startAetherIfNeeded(
-        upstreamPort: Int = BondingSocksServer.PORT,
-        enginePsiphon: Boolean = false,
-    ) {
+    private suspend fun startAetherIfNeeded(upstreamPort: Int = BondingSocksServer.PORT) {
         if (!EmbeddedAetherRuntime.isRunning()) {
-            val profile = profileStore.profile.first()
-                .copy(proxyMode = true, enginePsiphon = enginePsiphon)
-            AppLogger.log(
-                "VpnService",
-                "applyUpstreamChoice: starting Aether (upstreamPort=$upstreamPort psiphon=$enginePsiphon)",
-            )
+            val profile = profileStore.profile.first().copy(proxyMode = true)
+            AppLogger.log("VpnService", "applyUpstreamChoice: starting Aether (upstreamPort=$upstreamPort)")
             EmbeddedAetherRuntime.start(applicationContext, profile, upstreamPort)
         }
     }

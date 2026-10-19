@@ -813,15 +813,7 @@ pub async fn start(
         let notice: Notice = match serde_json::from_str(&line) {
             Ok(notice) => notice,
             Err(_) => {
-                // >>> AETHER-APP-PATCH psiphon-startup-diagnostics
-                // Not debug: the notice stream is JSON by definition, so a line
-                // that is not JSON means the client could not start at all
-                // (Android refuses a non-PIE executable with exactly such a
-                // line) or died before its first notice. At debug that reason
-                // was invisible and the failure surfaced minutes later as a
-                // port that never opened.
-                log::warn!("[-] psiphon: {line}");
-                // <<< AETHER-APP-PATCH psiphon-startup-diagnostics
+                log::debug!("[psiphon] {line}");
                 continue;
             }
         };
@@ -934,17 +926,6 @@ async fn embedded_server_list(exe: &Path) -> Option<PathBuf> {
     };
 
     if !usage.contains("-serverList") {
-        if usage.trim().is_empty() {
-            // >>> AETHER-APP-PATCH psiphon-startup-diagnostics
-            // An empty answer means the binary did not run for the probe, which
-            // is a much stronger statement than "this build has no flag": it
-            // usually cannot run for real either.
-            log::warn!(
-                "[-] psiphon: {} produced no output for -h; it may not be runnable on this device",
-                exe.display()
-            );
-            // <<< AETHER-APP-PATCH psiphon-startup-diagnostics
-        }
         log::warn!(
             "[-] psiphon: this console client does not take -serverList; relying on the remote list"
         );

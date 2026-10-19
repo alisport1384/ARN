@@ -77,14 +77,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSaveXrayConfig: Button
     private lateinit var toolbar: Toolbar
     private var upstreamChoice = UpstreamChoice.NONE
-    // Compose-visible mirror of upstreamChoice, kept in step wherever it changes.
-    // A plain var triggers no recomposition, and the Aether panel lives in a
-    // ComposeView: without this the Psiphon group would stay on screen - or stay
-    // missing - after a mode switch until some unrelated state recomposed it.
-    // Held as an explicit MutableState rather than a `by` delegate, because the
-    // delegate would generate a setUpstreamChoice setter that clashes with the
-    // private method of the same name below.
-    private val upstreamChoiceState = mutableStateOf(upstreamChoice)
     // Backed by Compose state (not a plain var): AetherEmbeddedPanel reads this inside
     // aetherEmbeddedPanel.setContent{}, so a plain var mutation here was invisible to Compose -
     // onProfileChange updated the value but nothing recomposed, making every Advanced-panel
@@ -141,7 +133,6 @@ class MainActivity : AppCompatActivity() {
         // SharedPreferences (synchronous read) on purpose: an async DataStore read would
         // reintroduce a window where the default is still visible.
         upstreamChoice = loadUpstreamChoice()
-        upstreamChoiceState.value = upstreamChoice
         initViews()
         setSupportActionBar(toolbar)
         setupUpstreamIntegration()
@@ -301,18 +292,14 @@ class MainActivity : AppCompatActivity() {
                             lifecycleScope.launch { aetherProfileStore.save(profile) }
                         },
                         enabled = aetherRuntimeEnabled,
-                        psiphonActive = upstreamChoiceState.value == UpstreamChoice.AETHER_PSIPHON,
                         onEnabledChange = { selected ->
                             // Inside the combined chains this toggle only governs the Aether
                             // stage: off collapses Direct+Aether+Xray / Direct+Xray+Aether to
                             // Direct+Xray, it never silently drops the Xray stage the user
-                            // explicitly selected. Direct+Aether+Psiphon has no stage of its
-                            // own to fall back to - Psiphon runs inside the engine, so
-                            // switching the engine off there leaves Direct.
+                            // explicitly selected.
                             val target = when {
                                 selected && upstreamChoice == UpstreamChoice.AETHER_XRAY -> UpstreamChoice.AETHER_XRAY
                                 selected && upstreamChoice == UpstreamChoice.XRAY_AETHER -> UpstreamChoice.XRAY_AETHER
-                                selected && upstreamChoice == UpstreamChoice.AETHER_PSIPHON -> UpstreamChoice.AETHER_PSIPHON
                                 selected -> UpstreamChoice.AETHER
                                 upstreamChoice == UpstreamChoice.AETHER_XRAY ||
                                     upstreamChoice == UpstreamChoice.XRAY_AETHER -> UpstreamChoice.XRAY
@@ -326,17 +313,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            aetherProfileStore.profile.collectLatest { stored ->
-                // The stored exit country is now a row inside the Aether panel's
-                // own Advanced card, which reads it straight off this profile -
-                // nothing to re-sync from here.
-                aetherProfile = stored.copy(proxyMode = true)
-            }
+            aetherProfileStore.profile.collectLatest { aetherProfile = it.copy(proxyMode = true) }
         }
 
 
 
-        val options = arrayOf("Direct", "Direct + Aether", "Direct + Xray", "Direct + Aether + Xray", "Direct + Xray + Aether", "Direct + Aether + Psiphon")
+        val options = arrayOf("Direct", "Direct + Aether", "Direct + Xray", "Direct + Aether + Xray", "Direct + Xray + Aether")
         spinnerAetherMode.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, options)
         // A Spinner ALWAYS fires onItemSelected once after layout with whatever position is
         // selected at that moment - it is not a user action. A fresh adapter defaults to
@@ -355,7 +337,6 @@ class MainActivity : AppCompatActivity() {
                     2 -> UpstreamChoice.XRAY
                     3 -> UpstreamChoice.AETHER_XRAY
                     4 -> UpstreamChoice.XRAY_AETHER
-                    5 -> UpstreamChoice.AETHER_PSIPHON
                     else -> UpstreamChoice.NONE
                 }
                 setUpstreamChoice(selected)
@@ -373,7 +354,6 @@ class MainActivity : AppCompatActivity() {
         if (upstreamChoice == choice) return
         AppLogger.log("Upstream", "switching $upstreamChoice -> $choice")
         upstreamChoice = choice
-        upstreamChoiceState.value = choice
         saveUpstreamChoice(choice)
         renderUpstreamChoice()
         // Keep the mode spinner consistent when the choice changes from somewhere else
@@ -404,7 +384,6 @@ class MainActivity : AppCompatActivity() {
         UpstreamChoice.XRAY -> 2
         UpstreamChoice.AETHER_XRAY -> 3
         UpstreamChoice.XRAY_AETHER -> 4
-        UpstreamChoice.AETHER_PSIPHON -> 5
     }
 
     private fun renderUpstreamChoice() {
@@ -413,7 +392,6 @@ class MainActivity : AppCompatActivity() {
             UpstreamChoice.XRAY -> "مسیر بعد از Bonding: Direct → Xray"
             UpstreamChoice.AETHER_XRAY -> "مسیر بعد از Bonding: Direct → Aether → Xray"
             UpstreamChoice.XRAY_AETHER -> "مسیر بعد از Bonding: Direct → Xray → Aether"
-            UpstreamChoice.AETHER_PSIPHON -> "مسیر بعد از Bonding: Direct → Aether → Psiphon"
             UpstreamChoice.NONE -> "مسیر بعد از Bonding: Direct"
         }
         // Aether's settings panel only makes sense while Aether is part of the active
@@ -421,8 +399,7 @@ class MainActivity : AppCompatActivity() {
         // for an engine that wasn't even the active upstream.
         val usesAether = upstreamChoice == UpstreamChoice.AETHER ||
             upstreamChoice == UpstreamChoice.AETHER_XRAY ||
-            upstreamChoice == UpstreamChoice.XRAY_AETHER ||
-            upstreamChoice == UpstreamChoice.AETHER_PSIPHON
+            upstreamChoice == UpstreamChoice.XRAY_AETHER
         aetherEmbeddedPanel.visibility = if (usesAether) View.VISIBLE else View.GONE
         // Same reasoning for the Xray config input: only visible for the Xray chains.
         val usesXray = upstreamChoice == UpstreamChoice.XRAY ||

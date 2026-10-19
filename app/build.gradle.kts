@@ -51,23 +51,6 @@ android {
             useLegacyPackaging = true
         }
     }
-
-    // Per-ABI release APKs, enabled with -PabiSplits (the release job in
-    // .github/workflows/build.yml). The native cores - libaether.so, libxray.so
-    // and the psiphon console client - are only built for arm64-v8a and
-    // armeabi-v7a, so those are exactly the two splits; a universal APK would
-    // just carry both cores for every device. Gated on a property so ordinary
-    // debug builds keep producing the single APK they always did.
-    if (project.hasProperty("abiSplits")) {
-        splits {
-            abi {
-                isEnable = true
-                reset()
-                include("arm64-v8a", "armeabi-v7a")
-                isUniversalApk = false
-            }
-        }
-    }
 }
 
 tasks.register("verifyAetherEngineAssets") {
@@ -84,13 +67,6 @@ tasks.register("verifyAetherEngineAssets") {
             val xray = file("src/main/jniLibs/$abi/libxray.so")
             if (!xray.isFile || xray.length() == 0L) {
                 throw GradleException("Missing Xray core binary for $abi: ${xray.absolutePath} (run scripts/build-xray.sh)")
-            }
-            // The psiphon-tunnel-core console client (Direct + Aether + Psiphon). The
-            // Aether ENGINE spawns this one itself, from nativeLibraryDir, named by
-            // AETHER_PSIPHON_BIN - built by scripts/build-psiphon.sh.
-            val psiphon = file("src/main/jniLibs/$abi/libpsiphon.so")
-            if (!psiphon.isFile || psiphon.length() == 0L) {
-                throw GradleException("Missing psiphon console client for $abi: ${psiphon.absolutePath} (run scripts/build-psiphon.sh)")
             }
         }
     }
